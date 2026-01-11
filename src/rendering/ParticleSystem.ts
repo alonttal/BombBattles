@@ -11,7 +11,8 @@ interface Particle {
   friction: number;
   rotation: number;
   rotationSpeed: number;
-  shape: 'circle' | 'square' | 'spark';
+  shape: 'circle' | 'square' | 'spark' | 'text' | 'ring';
+  text?: string;
 }
 
 export interface ParticleConfig {
@@ -26,7 +27,8 @@ export interface ParticleConfig {
   colors: string[];
   gravity?: number;
   friction?: number;
-  shape?: 'circle' | 'square' | 'spark';
+  shape?: 'circle' | 'square' | 'spark' | 'text' | 'ring';
+  text?: string;
 }
 
 // Preset configurations
@@ -127,6 +129,26 @@ export const PARTICLE_PRESETS = {
     gravity: -30,
     friction: 0.98,
     shape: 'circle' as const
+  },
+
+  flash: {
+    count: 1,
+    spread: 0,
+    speed: { min: 0, max: 0 },
+    lifetime: { min: 0.1, max: 0.15 },
+    size: { min: 200, max: 300 },
+    colors: ['#ffffff'],
+    shape: 'circle' as const
+  },
+
+  shockwave: {
+    count: 1,
+    spread: 0,
+    speed: { min: 0, max: 0 },
+    lifetime: { min: 0.3, max: 0.5 },
+    size: { min: 100, max: 200 },
+    colors: ['#ffffff'],
+    shape: 'ring' as const
   }
 };
 
@@ -147,7 +169,8 @@ export class ParticleSystem {
       colors,
       gravity = 0,
       friction = 1,
-      shape = 'circle'
+      shape = 'circle',
+      text
     } = config;
 
     for (let i = 0; i < count; i++) {
@@ -182,7 +205,8 @@ export class ParticleSystem {
         friction,
         rotation: Math.random() * Math.PI * 2,
         rotationSpeed: (Math.random() - 0.5) * 10,
-        shape
+        shape,
+        text
       });
     }
   }
@@ -248,6 +272,29 @@ export class ParticleSystem {
           ctx.rotate(Math.atan2(p.vy, p.vx));
           ctx.fillRect(-size, -size / 4, size * 2, size / 2);
           ctx.restore();
+          break;
+
+        case 'text':
+          if (p.text) {
+            ctx.font = `bold ${Math.round(size)}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 3;
+            ctx.strokeText(p.text, p.x, p.y);
+            ctx.fillText(p.text, p.x, p.y);
+          }
+          break;
+
+        case 'ring':
+          ctx.beginPath();
+          // Expanding ring effect
+          const ringScale = 2 - alpha; // Grows as it dies
+          const ringSize = size * ringScale;
+          ctx.arc(p.x, p.y, ringSize / 2, 0, Math.PI * 2);
+          ctx.strokeStyle = p.color;
+          ctx.lineWidth = 10 * alpha;
+          ctx.stroke();
           break;
       }
     }

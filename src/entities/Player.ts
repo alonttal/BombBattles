@@ -40,6 +40,13 @@ export class Player extends Entity {
   private animationFrame: number = 0;
   private animationTimer: number = 0;
 
+  // Juice
+  private blinkTimer: number = 0;
+  private isBlinking: boolean = false;
+  private nextBlinkTime: number = Math.random() * 3 + 2;
+  private squashX: number = 1;
+  private squashY: number = 1;
+
   // For debuffs
   private debuffs: Map<string, number> = new Map();
 
@@ -74,8 +81,31 @@ export class Player extends Entity {
         this.animationTimer = 0;
         this.animationFrame = (this.animationFrame + 1) % 4;
       }
+
+      // Bounce effect (Squash & Stretch)
+      this.squashX = 1 + Math.sin(this.animationFrame * Math.PI) * 0.1;
+      this.squashY = 1 - Math.sin(this.animationFrame * Math.PI) * 0.1;
+
     } else {
       this.animationFrame = 0;
+      // Recover to normal shape
+      this.squashX += (1 - this.squashX) * deltaTime * 10;
+      this.squashY += (1 - this.squashY) * deltaTime * 10;
+    }
+
+    // Blinking
+    this.blinkTimer += deltaTime;
+    if (this.isBlinking) {
+      if (this.blinkTimer > 0.1) {
+        this.isBlinking = false;
+        this.blinkTimer = 0;
+        this.nextBlinkTime = Math.random() * 3 + 2;
+      }
+    } else {
+      if (this.blinkTimer > this.nextBlinkTime) {
+        this.isBlinking = true;
+        this.blinkTimer = 0;
+      }
     }
   }
 
@@ -117,33 +147,142 @@ export class Player extends Entity {
   private drawPlayer(ctx: CanvasRenderingContext2D, x: number, y: number, color: string): void {
     const bobOffset = this.isMoving ? Math.sin(this.animationFrame * Math.PI / 2) * 2 : 0;
 
-    // Body
+    const cx = x + TILE_SIZE / 2;
+    const cy = y + TILE_SIZE / 2 + bobOffset;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(this.squashX, this.squashY);
+
+    // Hands & Feet (drawn relative to center)
+    const handOffset = this.isMoving ? Math.sin(this.animationFrame * Math.PI) * 6 : 0;
+    const footOffset = this.isMoving ? Math.cos(this.animationFrame * Math.PI) * 6 : 0;
+
+    ctx.fillStyle = color;
+
+    // Left Foot - with outline
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(-8, 12 + footOffset, 5, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    // Right Foot - with outline
+    ctx.beginPath();
+    ctx.ellipse(8, 12 - footOffset, 5, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Hands
+    // Back hand - with outline
+    ctx.beginPath();
+    ctx.arc(this.direction === Direction.RIGHT ? -14 : 14, 0 - handOffset, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Body - with glow and outline
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 15;
     ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2 - 4 + bobOffset, 16, 0, Math.PI * 2);
+    ctx.arc(0, -4, 16, 0, Math.PI * 2);
     ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Body outline
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    // Body highlight (to make it look shiny)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.beginPath();
+    ctx.arc(-4, -8, 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Front hand - with outline
+    ctx.fillStyle = color;
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(this.direction === Direction.RIGHT ? 14 : -14, 0 + handOffset, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
 
     // Face
     ctx.fillStyle = '#ffffff';
-    const eyeOffsetX = this.direction === Direction.LEFT ? -3 : this.direction === Direction.RIGHT ? 3 : 0;
-    const eyeOffsetY = this.direction === Direction.UP ? -3 : this.direction === Direction.DOWN ? 3 : 0;
-    ctx.beginPath();
-    ctx.arc(x + TILE_SIZE / 2 - 5 + eyeOffsetX, y + TILE_SIZE / 2 - 6 + eyeOffsetY + bobOffset, 4, 0, Math.PI * 2);
-    ctx.arc(x + TILE_SIZE / 2 + 5 + eyeOffsetX, y + TILE_SIZE / 2 - 6 + eyeOffsetY + bobOffset, 4, 0, Math.PI * 2);
-    ctx.fill();
+    const eyeOffsetX = this.direction === Direction.LEFT ? -4 : this.direction === Direction.RIGHT ? 4 : 0;
+    const eyeOffsetY = this.direction === Direction.UP ? -3 : this.direction === Direction.DOWN ? 2 : 0;
 
-    // Pupils
-    ctx.fillStyle = '#000000';
-    ctx.beginPath();
-    ctx.arc(x + TILE_SIZE / 2 - 5 + eyeOffsetX * 1.5, y + TILE_SIZE / 2 - 6 + eyeOffsetY * 1.5 + bobOffset, 2, 0, Math.PI * 2);
-    ctx.arc(x + TILE_SIZE / 2 + 5 + eyeOffsetX * 1.5, y + TILE_SIZE / 2 - 6 + eyeOffsetY * 1.5 + bobOffset, 2, 0, Math.PI * 2);
-    ctx.fill();
+    if (this.direction !== Direction.UP) {
+      // Left Eye
+      this.drawEye(ctx, -5 + eyeOffsetX, -6 + eyeOffsetY);
+      // Right Eye
+      this.drawEye(ctx, 5 + eyeOffsetX, -6 + eyeOffsetY);
+    }
 
-    // Player number
+    // Player number badge with background
+    const badgeY = -24;
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+    ctx.shadowBlur = 4;
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 12px Arial';
+    ctx.beginPath();
+    ctx.arc(0, badgeY, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = color;
+    ctx.font = 'bold 10px Arial';
     ctx.textAlign = 'center';
-    ctx.fillText(`${this.playerIndex + 1}`, x + TILE_SIZE / 2, y + TILE_SIZE / 2 + 6 + bobOffset);
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`${this.playerIndex + 1}`, 0, badgeY);
+
+    ctx.restore();
+  }
+
+  private drawEye(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+    if (this.isBlinking) {
+      ctx.beginPath();
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 2.5;
+      ctx.moveTo(x - 3, y);
+      ctx.lineTo(x + 3, y);
+      ctx.stroke();
+    } else {
+      // Eye white with outline
+      ctx.beginPath();
+      ctx.fillStyle = '#ffffff';
+      ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Pupil
+      ctx.fillStyle = '#000000';
+      ctx.beginPath();
+      ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Eye shine (makes it look alive!)
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+      ctx.beginPath();
+      ctx.arc(x - 1, y - 1, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Eyebrow for expression
+      ctx.beginPath();
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 1.5;
+      ctx.moveTo(x - 4, y - 6);
+      ctx.lineTo(x + 3, y - 4);
+      ctx.stroke();
+    }
   }
 
   move(direction: Direction, deltaTime: number): void {

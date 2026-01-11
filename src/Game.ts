@@ -20,6 +20,7 @@ import { Block } from './entities/Block';
 import { Explosion, ExplosionTile } from './entities/Explosion';
 import { PowerUp, PowerUpType } from './entities/PowerUp';
 import { TileType, MapData, CLASSIC_MAP } from './map/TileTypes';
+import { AIController } from './ai/AIController';
 
 export class Game {
   private renderer: Renderer;
@@ -37,6 +38,12 @@ export class Game {
   private countdownTime: number = COUNTDOWN_TIME;
   private playerCount: number = 2;
   private winner: Player | null = null;
+
+  // AI support
+  private aiControllers: Map<number, AIController> = new Map();
+  private aiPlayers: Set<number> = new Set();
+  private isSinglePlayer: boolean = false;
+  private aiDifficulty: 'easy' | 'medium' | 'hard' = 'medium';
 
   // Grid for collision detection
   private grid: (Block | Bomb | null)[][] = [];
@@ -102,18 +109,49 @@ export class Game {
       this.startNewGame();
     }
 
-    // Number keys to select player count
-    if (this.inputManager.isKeyJustPressed('Digit2')) {
-      this.playerCount = 2;
-      SoundManager.play('menuSelect');
-    }
-    if (this.inputManager.isKeyJustPressed('Digit3')) {
-      this.playerCount = 3;
-      SoundManager.play('menuSelect');
-    }
-    if (this.inputManager.isKeyJustPressed('Digit4')) {
+    // S key for single player
+    if (this.inputManager.isKeyJustPressed('KeyS')) {
+      this.isSinglePlayer = true;
       this.playerCount = 4;
       SoundManager.play('menuSelect');
+    }
+
+    // M key for multiplayer
+    if (this.inputManager.isKeyJustPressed('KeyM')) {
+      this.isSinglePlayer = false;
+      SoundManager.play('menuSelect');
+    }
+
+    // Number keys to select player count (multiplayer only)
+    if (!this.isSinglePlayer) {
+      if (this.inputManager.isKeyJustPressed('Digit2')) {
+        this.playerCount = 2;
+        SoundManager.play('menuSelect');
+      }
+      if (this.inputManager.isKeyJustPressed('Digit3')) {
+        this.playerCount = 3;
+        SoundManager.play('menuSelect');
+      }
+      if (this.inputManager.isKeyJustPressed('Digit4')) {
+        this.playerCount = 4;
+        SoundManager.play('menuSelect');
+      }
+    }
+
+    // Difficulty selection for single player (1, 2, 3 keys)
+    if (this.isSinglePlayer) {
+      if (this.inputManager.isKeyJustPressed('Digit1')) {
+        this.aiDifficulty = 'easy';
+        SoundManager.play('menuSelect');
+      }
+      if (this.inputManager.isKeyJustPressed('Digit2')) {
+        this.aiDifficulty = 'medium';
+        SoundManager.play('menuSelect');
+      }
+      if (this.inputManager.isKeyJustPressed('Digit3')) {
+        this.aiDifficulty = 'hard';
+        SoundManager.play('menuSelect');
+      }
     }
   }
 
@@ -157,18 +195,55 @@ export class Game {
       player.savePreviousPosition();
     }
 
+    // Update AI controllers and get AI decisions
+    const currentTime = performance.now();
+    const aiDecisions: Map<number, { direction: Direction | null; placeBomb: boolean }> = new Map();
+
+    for (const [playerIndex, aiController] of this.aiControllers) {
+      const player = this.players[playerIndex];
+      if (!player || !player.isPlayerAlive()) continue;
+
+      const decision = aiController.update(
+        deltaTime,
+        currentTime,
+        this.blocks,
+        this.bombs,
+        this.explosions,
+        this.powerUps,
+        this.players
+      );
+      aiDecisions.set(playerIndex, decision);
+    }
+
     // Update player input and movement
     for (const player of this.players) {
       if (!player.isPlayerAlive()) continue;
 
-      const direction = this.inputManager.getMovementDirection(player.playerIndex);
+      let direction: Direction | null = null;
+      let shouldPlaceBomb = false;
+
+      // Check if this player is AI-controlled
+      if (this.aiPlayers.has(player.playerIndex)) {
+        const aiDecision = aiDecisions.get(player.playerIndex);
+        if (aiDecision) {
+          direction = aiDecision.direction;
+          shouldPlaceBomb = aiDecision.placeBomb;
+        }
+      } else {
+        // Human player input
+        direction = this.inputManager.getMovementDirection(player.playerIndex);
+        shouldPlaceBomb = this.inputManager.isBombPressed(player.playerIndex);
+      }
+
+      // Apply movement
       if (direction) {
         this.movePlayer(player, direction, deltaTime);
       } else {
         player.stopMoving();
       }
 
-      if (this.inputManager.isBombPressed(player.playerIndex)) {
+      // Apply bomb placement
+      if (shouldPlaceBomb) {
         this.tryPlaceBomb(player);
       }
 
@@ -229,7 +304,7 @@ export class Game {
   private render(interpolation: number): void {
     switch (this.phase) {
       case GamePhase.MAIN_MENU:
-        this.renderer.renderMainMenu(this.playerCount);
+        this.renderer.renderMainMenu(this.playerCount, this.isSinglePlayer, this.aiDifficulty);
         break;
 
       case GamePhase.COUNTDOWN:
@@ -301,6 +376,8 @@ export class Game {
 
   private spawnPlayers(): void {
     this.players = [];
+    this.aiControllers.clear();
+    this.aiPlayers.clear();
 
     const spawnPositions = [
       { x: 1, y: 1 },
@@ -313,6 +390,13 @@ export class Game {
       const spawn = spawnPositions[i];
       const player = new Player(spawn.x, spawn.y, i);
       this.players.push(player);
+
+      // In single player mode, all players except the first one are AI
+      if (this.isSinglePlayer && i > 0) {
+        this.aiPlayers.add(i);
+        const aiController = new AIController(player, this.aiDifficulty);
+        this.aiControllers.set(i, aiController);
+      }
     }
   }
 
@@ -496,6 +580,11 @@ export class Game {
     const particles = this.renderer.getParticleSystem();
     const camera = this.renderer.getCamera();
 
+    // Visual Juice: Flash and Shockwave
+    particles.emitPreset('flash', centerX, centerY);
+    // Shockwave only for non-ice bombs (ice is more subtle?) or all bombs
+    particles.emitPreset('shockwave', centerX, centerY);
+
     // Choose particle preset based on bomb type
     if (type === BombType.ICE) {
       particles.emitPreset('iceExplosion', centerX, centerY);
@@ -618,7 +707,7 @@ export class Game {
       if (!powerUp.isActive) continue;
 
       if (player.position.gridX === powerUp.position.gridX &&
-          player.position.gridY === powerUp.position.gridY) {
+        player.position.gridY === powerUp.position.gridY) {
         // Add collection particles
         const centerX = powerUp.position.pixelX + TILE_SIZE / 2;
         const centerY = powerUp.position.pixelY + TILE_SIZE / 2;
@@ -636,6 +725,37 @@ export class Game {
         }
 
         this.applyPowerUp(player, powerUp);
+
+        // Show floating text
+        const powerUpNames: Record<PowerUpType, string> = {
+          [PowerUpType.BOMB_UP]: '+1 BOMB',
+          [PowerUpType.FIRE_UP]: 'BIGGER FIRE',
+          [PowerUpType.SPEED_UP]: 'SPEED UP!',
+          [PowerUpType.SHIELD]: 'SHIELD!',
+          [PowerUpType.KICK]: 'KICK!',
+          [PowerUpType.PUNCH]: 'PUNCH!',
+          [PowerUpType.TELEPORT]: 'TELEPORT!',
+          [PowerUpType.FIRE_BOMB]: 'FIRE BOMBS!',
+          [PowerUpType.ICE_BOMB]: 'ICE BOMBS!',
+          [PowerUpType.PIERCING_BOMB]: 'PIERCE BOMBS!',
+          [PowerUpType.SKULL]: 'CURSED!'
+        };
+
+        particles.emit({
+          x: centerX,
+          y: centerY - 10,
+          count: 1,
+          spread: 0,
+          speed: { min: 20, max: 30 },
+          angle: { min: -Math.PI / 2, max: -Math.PI / 2 },
+          lifetime: { min: 1.0, max: 1.5 },
+          size: { min: 14, max: 16 },
+          colors: ['#ffffff'],
+          gravity: -10,
+          shape: 'text',
+          text: powerUpNames[powerUp.type]
+        });
+
         powerUp.destroy();
       }
     }

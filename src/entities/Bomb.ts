@@ -33,44 +33,117 @@ export class Bomb extends Entity {
     const x = this.position.pixelX;
     const y = this.position.pixelY;
 
-    // Pulsing effect based on timer
+    // Pulsing effect based on timer (more dramatic)
     const urgency = 1 - (this.timer / BOMB_FUSE_TIME);
-    const pulseSpeed = 8 + urgency * 12;
-    const pulseScale = 1 + Math.sin(this.pulseTimer * pulseSpeed) * 0.1 * (1 + urgency);
+    const pulseSpeed = 8 + urgency * 16;
+    const pulseScale = 1 + Math.sin(this.pulseTimer * pulseSpeed) * 0.15 * (1 + urgency * 0.5);
     const size = (TILE_SIZE - 12) * pulseScale;
 
+    const centerX = x + TILE_SIZE / 2;
+    const centerY = y + TILE_SIZE / 2;
+
     // Shadow
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
     ctx.beginPath();
-    ctx.ellipse(x + TILE_SIZE / 2, y + TILE_SIZE - 4, 14, 5, 0, 0, Math.PI * 2);
+    ctx.ellipse(centerX, y + TILE_SIZE - 4, 16, 6, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Bomb body
+    // Danger glow (increases with urgency)
+    if (urgency > 0.3) {
+      const glowIntensity = urgency * 30;
+      const glowColor = this.type === BombType.NORMAL ? '#FF0000' : this.getBombColor();
+      ctx.shadowColor = glowColor;
+      ctx.shadowBlur = glowIntensity;
+
+      // Pulsing danger ring
+      ctx.strokeStyle = glowColor;
+      ctx.globalAlpha = 0.3 + urgency * 0.3;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, size / 2 + 8, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    // Bomb body with outline
+    ctx.shadowColor = this.getBombColor();
+    ctx.shadowBlur = 10;
     ctx.fillStyle = this.getBombColor();
     ctx.beginPath();
-    ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, size / 2, 0, Math.PI * 2);
+    ctx.arc(centerX, centerY, size / 2, 0, Math.PI * 2);
     ctx.fill();
+    ctx.shadowBlur = 0;
 
-    // Highlight
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-    ctx.beginPath();
-    ctx.arc(x + TILE_SIZE / 2 - 6, y + TILE_SIZE / 2 - 6, 6, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Fuse
-    ctx.strokeStyle = '#8B4513';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(x + TILE_SIZE / 2, y + TILE_SIZE / 2 - size / 2);
-    ctx.lineTo(x + TILE_SIZE / 2 + 8, y + TILE_SIZE / 2 - size / 2 - 8);
+    // Black outline for classic bomb look
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2.5;
     ctx.stroke();
 
-    // Fuse spark
-    if (Math.sin(this.pulseTimer * 20) > 0) {
-      ctx.fillStyle = '#FFA500';
+    // Highlight (shiny surface)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.beginPath();
+    ctx.arc(centerX - 6, centerY - 6, 7, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Smaller highlight for extra shine
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.beginPath();
+    ctx.arc(centerX - 4, centerY - 8, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Fuse (thicker and more visible)
+    ctx.strokeStyle = '#654321';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(centerX, centerY - size / 2);
+    ctx.lineTo(centerX + 10, centerY - size / 2 - 10);
+    ctx.stroke();
+
+    // Fuse outline
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 5.5;
+    ctx.globalCompositeOperation = 'destination-over';
+    ctx.beginPath();
+    ctx.moveTo(centerX, centerY - size / 2);
+    ctx.lineTo(centerX + 10, centerY - size / 2 - 10);
+    ctx.stroke();
+    ctx.globalCompositeOperation = 'source-over';
+
+    // Fuse spark (more dramatic)
+    const sparkIntensity = Math.sin(this.pulseTimer * 20);
+    if (sparkIntensity > -0.3) {
+      const sparkSize = 4 + urgency * 3 + Math.max(0, sparkIntensity) * 2;
+
+      // Spark glow
+      ctx.shadowColor = '#FF6600';
+      ctx.shadowBlur = 15;
+
+      ctx.fillStyle = sparkIntensity > 0 ? '#FFF700' : '#FF6600';
       ctx.beginPath();
-      ctx.arc(x + TILE_SIZE / 2 + 8, y + TILE_SIZE / 2 - size / 2 - 8, 4, 0, Math.PI * 2);
+      ctx.arc(centerX + 10, centerY - size / 2 - 10, sparkSize, 0, Math.PI * 2);
       ctx.fill();
+
+      ctx.shadowBlur = 0;
+
+      // Spark particles (when urgent)
+      if (urgency > 0.5 && Math.random() > 0.7) {
+        ctx.fillStyle = '#FF8800';
+        ctx.globalAlpha = 0.6;
+        for (let i = 0; i < 3; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const dist = 5 + Math.random() * 8;
+          ctx.beginPath();
+          ctx.arc(
+            centerX + 10 + Math.cos(angle) * dist,
+            centerY - size / 2 - 10 + Math.sin(angle) * dist,
+            1 + Math.random() * 2,
+            0,
+            Math.PI * 2
+          );
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
     }
   }
 
