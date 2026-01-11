@@ -30,18 +30,18 @@ export const POWERUP_SPAWN_CHANCE = 0.35;
 export const ROUND_TIME = 180; // 3 minutes
 export const COUNTDOWN_TIME = 3; // seconds before round starts
 
-// Colors (for placeholder graphics)
+// Colors (for placeholder graphics) - Bright and Happy!
 export const COLORS = {
-  background: '#2d5a27',
-  wall: '#4a4a4a',
-  softBlock: '#8b6914',
-  player1: '#e74c3c',
-  player2: '#3498db',
-  player3: '#2ecc71',
-  player4: '#f1c40f',
-  bomb: '#1a1a1a',
-  explosion: '#ff6b35',
-  powerUp: '#9b59b6'
+  background: '#6BBF59', // Vibrant Grass Green
+  wall: '#B0C4DE',       // Light Steel Blue (cheerful)
+  softBlock: '#FF9F40',  // Bright Orange/Wood
+  player1: '#FF3366',    // Hot Pink-Red (more vibrant)
+  player2: '#3399FF',    // Sky Blue (brighter)
+  player3: '#33FF99',    // Mint Green (more electric)
+  player4: '#FFD700',    // Gold Yellow (more radiant)
+  bomb: '#2C2C2C',       // Charcoal Black (classic cartoon bomb)
+  explosion: '#FF6B35',  // Bright Orange-Red
+  powerUp: '#FF1493'     // Deep Pink (exciting)
 };
 
 // Direction enum

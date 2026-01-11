@@ -16,17 +16,17 @@ export enum PowerUpType {
 }
 
 const POWERUP_COLORS: Record<PowerUpType, { bg: string; icon: string }> = {
-  [PowerUpType.BOMB_UP]: { bg: '#3498db', icon: '💣' },
-  [PowerUpType.FIRE_UP]: { bg: '#e74c3c', icon: '🔥' },
-  [PowerUpType.SPEED_UP]: { bg: '#2ecc71', icon: '⚡' },
-  [PowerUpType.SHIELD]: { bg: '#00ffff', icon: '🛡️' },
-  [PowerUpType.KICK]: { bg: '#f39c12', icon: '👟' },
-  [PowerUpType.PUNCH]: { bg: '#9b59b6', icon: '👊' },
-  [PowerUpType.TELEPORT]: { bg: '#1abc9c', icon: '✨' },
-  [PowerUpType.FIRE_BOMB]: { bg: '#ff4500', icon: '🌋' },
-  [PowerUpType.ICE_BOMB]: { bg: '#00ced1', icon: '❄️' },
-  [PowerUpType.PIERCING_BOMB]: { bg: '#8b00ff', icon: '💜' },
-  [PowerUpType.SKULL]: { bg: '#2c3e50', icon: '💀' }
+  [PowerUpType.BOMB_UP]: { bg: '#4DB8FF', icon: '💣' }, // Bright sky blue
+  [PowerUpType.FIRE_UP]: { bg: '#FF4757', icon: '🔥' }, // Bright red
+  [PowerUpType.SPEED_UP]: { bg: '#7BED9F', icon: '⚡' }, // Bright green
+  [PowerUpType.SHIELD]: { bg: '#00E5FF', icon: '🛡️' }, // Cyan
+  [PowerUpType.KICK]: { bg: '#FFA502', icon: '👟' }, // Bright orange
+  [PowerUpType.PUNCH]: { bg: '#C77DFF', icon: '👊' }, // Bright purple
+  [PowerUpType.TELEPORT]: { bg: '#4ECDC4', icon: '✨' }, // Turquoise
+  [PowerUpType.FIRE_BOMB]: { bg: '#FF6348', icon: '🌋' }, // Coral red
+  [PowerUpType.ICE_BOMB]: { bg: '#70A1FF', icon: '❄️' }, // Ice blue
+  [PowerUpType.PIERCING_BOMB]: { bg: '#A55EEA', icon: '💜' }, // Purple
+  [PowerUpType.SKULL]: { bg: '#57606F', icon: '💀' } // Medium grey (not too dark)
 };
 
 export class PowerUp extends Entity {
@@ -45,16 +45,32 @@ export class PowerUp extends Entity {
   render(ctx: CanvasRenderingContext2D, _interpolation: number): void {
     const x = this.position.pixelX;
     const y = this.position.pixelY;
-    const bobOffset = Math.sin(this.bobTimer * 4) * 3;
+    const bobOffset = Math.sin(this.bobTimer * 4) * 4; // Increased bob
 
     const colors = POWERUP_COLORS[this.type];
     const centerX = x + TILE_SIZE / 2;
     const centerY = y + TILE_SIZE / 2 + bobOffset;
-    const radius = TILE_SIZE / 2 - 6;
 
-    // Glow effect
+    // Heartbeat pulse effect (more pronounced)
+    const pulse = 1 + Math.sin(this.bobTimer * 8) * 0.15;
+    const radius = (TILE_SIZE / 2 - 6) * pulse;
+
+    // Outer glow ring (pulsing)
+    const glowPulse = 1 + Math.sin(this.bobTimer * 6) * 0.2;
     ctx.shadowColor = colors.bg;
-    ctx.shadowBlur = 10;
+    ctx.shadowBlur = 20 * glowPulse;
+    ctx.strokeStyle = colors.bg;
+    ctx.lineWidth = 3;
+    ctx.globalAlpha = 0.4;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius + 5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+
+    // Strong glow effect
+    ctx.shadowColor = colors.bg;
+    ctx.shadowBlur = 25;
 
     // Background circle
     ctx.fillStyle = colors.bg;
@@ -64,10 +80,19 @@ export class PowerUp extends Entity {
 
     ctx.shadowBlur = 0;
 
-    // Border
+    // Border (thick white outline)
     ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 3;
     ctx.stroke();
+
+    // Inner highlight for depth
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.beginPath();
+    ctx.arc(centerX - 4, centerY - 4, radius * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Draw sparkles around the powerup
+    this.drawSparkles(ctx, centerX, centerY, radius + 8);
 
     // Icon (using simple shapes instead of emoji for consistency)
     ctx.fillStyle = '#ffffff';
@@ -176,5 +201,33 @@ export class PowerUp extends Entity {
     }
     ctx.closePath();
     ctx.fill();
+  }
+
+  private drawSparkles(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius: number): void {
+    // Draw 4 rotating sparkles around the powerup
+    const sparkleCount = 4;
+    const rotation = this.bobTimer * 2; // Rotate sparkles over time
+
+    for (let i = 0; i < sparkleCount; i++) {
+      const angle = (i / sparkleCount) * Math.PI * 2 + rotation;
+      const x = cx + Math.cos(angle) * radius;
+      const y = cy + Math.sin(angle) * radius;
+
+      // Sparkle size pulses
+      const sparklePulse = Math.abs(Math.sin(this.bobTimer * 10 + i));
+      const size = 3 + sparklePulse * 2;
+
+      ctx.fillStyle = 'rgba(255, 255, 255, ' + (0.6 + sparklePulse * 0.4) + ')';
+      ctx.beginPath();
+
+      // Draw a simple cross/plus shape for sparkle
+      ctx.fillRect(x - size, y - 0.5, size * 2, 1);
+      ctx.fillRect(x - 0.5, y - size, 1, size * 2);
+
+      // Add a small circle in the center
+      ctx.beginPath();
+      ctx.arc(x, y, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 }
