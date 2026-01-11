@@ -47,6 +47,11 @@ export class Player extends Entity {
   private squashX: number = 1;
   private squashY: number = 1;
 
+  // Punch animation
+  private isPunching: boolean = false;
+  private punchAnimationTimer: number = 0;
+  private punchAnimationDuration: number = 0.3;
+
   // For debuffs
   private debuffs: Map<string, number> = new Map();
 
@@ -107,6 +112,20 @@ export class Player extends Entity {
         this.blinkTimer = 0;
       }
     }
+
+    // Punch animation
+    if (this.isPunching) {
+      this.punchAnimationTimer += deltaTime;
+      if (this.punchAnimationTimer >= this.punchAnimationDuration) {
+        this.isPunching = false;
+        this.punchAnimationTimer = 0;
+      }
+    }
+  }
+
+  startPunchAnimation(): void {
+    this.isPunching = true;
+    this.punchAnimationTimer = 0;
   }
 
   render(ctx: CanvasRenderingContext2D, interpolation: number): void {
@@ -155,8 +174,16 @@ export class Player extends Entity {
     ctx.scale(this.squashX, this.squashY);
 
     // Hands & Feet (drawn relative to center)
-    const handOffset = this.isMoving ? Math.sin(this.animationFrame * Math.PI) * 6 : 0;
+    let handOffset = this.isMoving ? Math.sin(this.animationFrame * Math.PI) * 6 : 0;
     const footOffset = this.isMoving ? Math.cos(this.animationFrame * Math.PI) * 6 : 0;
+
+    // Punch animation - extend arm forward
+    let punchExtend = 0;
+    if (this.isPunching) {
+      const punchProgress = this.punchAnimationTimer / this.punchAnimationDuration;
+      // Punch out and back
+      punchExtend = Math.sin(punchProgress * Math.PI) * 12;
+    }
 
     ctx.fillStyle = color;
 
@@ -200,12 +227,34 @@ export class Player extends Entity {
     ctx.arc(-4, -8, 6, 0, Math.PI * 2);
     ctx.fill();
 
-    // Front hand - with outline
+    // Front hand - with outline (includes punch extension)
     ctx.fillStyle = color;
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(this.direction === Direction.RIGHT ? 14 : -14, 0 + handOffset, 5, 0, Math.PI * 2);
+
+    let frontHandX = this.direction === Direction.RIGHT ? 14 : -14;
+    let frontHandY = 0 + handOffset;
+
+    // Apply punch extension
+    if (this.isPunching) {
+      switch (this.direction) {
+        case Direction.RIGHT:
+          frontHandX += punchExtend;
+          break;
+        case Direction.LEFT:
+          frontHandX -= punchExtend;
+          break;
+        case Direction.UP:
+          frontHandY -= punchExtend;
+          break;
+        case Direction.DOWN:
+          frontHandY += punchExtend;
+          break;
+      }
+    }
+
+    ctx.arc(frontHandX, frontHandY, 5, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
 

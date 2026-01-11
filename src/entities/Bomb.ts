@@ -1,6 +1,6 @@
 import { Entity } from './Entity';
 import { Player, BombType } from './Player';
-import { TILE_SIZE, BOMB_FUSE_TIME, COLORS } from '../constants';
+import { TILE_SIZE, BOMB_FUSE_TIME, COLORS, Direction } from '../constants';
 import { EventBus } from '../core/EventBus';
 
 export class Bomb extends Entity {
@@ -9,6 +9,20 @@ export class Bomb extends Entity {
   public readonly range: number;
   public timer: number;
   public isDetonating: boolean = false;
+
+  // Kick ability properties
+  public isSliding: boolean = false;
+  public slideDirection: Direction | null = null;
+  public slideSpeed: number = 4; // tiles per second
+
+  // Punch ability properties
+  public isPunched: boolean = false;
+  public punchProgress: number = 0; // 0 to 1
+  public punchStartX: number = 0;
+  public punchStartY: number = 0;
+  public punchTargetX: number = 0;
+  public punchTargetY: number = 0;
+  public punchDuration: number = 0.5; // seconds
 
   private pulseTimer: number = 0;
 
@@ -23,6 +37,30 @@ export class Bomb extends Entity {
   update(deltaTime: number): void {
     this.timer -= deltaTime;
     this.pulseTimer += deltaTime;
+
+    // Update punch animation
+    if (this.isPunched) {
+      this.punchProgress += deltaTime / this.punchDuration;
+
+      if (this.punchProgress >= 1) {
+        // Punch complete - land at target
+        this.isPunched = false;
+        this.punchProgress = 0;
+        this.position.pixelX = this.punchTargetX;
+        this.position.pixelY = this.punchTargetY;
+        this.position.gridX = Math.round(this.punchTargetX / TILE_SIZE);
+        this.position.gridY = Math.round(this.punchTargetY / TILE_SIZE);
+        EventBus.emit('bomb-landed', { bomb: this, gridX: this.position.gridX, gridY: this.position.gridY });
+      } else {
+        // Update position along arc
+        const t = this.punchProgress;
+        // Smooth ease-out curve
+        const easedT = 1 - Math.pow(1 - t, 3);
+
+        this.position.pixelX = this.punchStartX + (this.punchTargetX - this.punchStartX) * easedT;
+        this.position.pixelY = this.punchStartY + (this.punchTargetY - this.punchStartY) * easedT;
+      }
+    }
 
     if (this.timer <= 0 && !this.isDetonating) {
       this.detonate();
@@ -39,8 +77,16 @@ export class Bomb extends Entity {
     const pulseScale = 1 + Math.sin(this.pulseTimer * pulseSpeed) * 0.15 * (1 + urgency * 0.5);
     const size = (TILE_SIZE - 12) * pulseScale;
 
+    // Arc offset for punch animation
+    let arcOffsetY = 0;
+    if (this.isPunched) {
+      // Parabolic arc - highest at middle of flight
+      const t = this.punchProgress;
+      arcOffsetY = -Math.sin(t * Math.PI) * 30; // Max height of 30 pixels
+    }
+
     const centerX = x + TILE_SIZE / 2;
-    const centerY = y + TILE_SIZE / 2;
+    const centerY = y + TILE_SIZE / 2 + arcOffsetY;
 
     // Shadow
     ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
@@ -178,5 +224,35 @@ export class Bomb extends Entity {
     if (!this.isDetonating) {
       this.timer = 0;
     }
+  }
+
+  kick(direction: Direction): void {
+    this.isSliding = true;
+    this.slideDirection = direction;
+    EventBus.emit('bomb-kicked', { bomb: this, direction });
+  }
+
+  stopSliding(): void {
+    this.isSliding = false;
+    this.slideDirection = null;
+    // Snap to grid
+    this.position.gridX = Math.round(this.position.pixelX / TILE_SIZE);
+    this.position.gridY = Math.round(this.position.pixelY / TILE_SIZE);
+    this.position.pixelX = this.position.gridX * TILE_SIZE;
+    this.position.pixelY = this.position.gridY * TILE_SIZE;
+  }
+
+  punch(targetGridX: number, targetGridY: number): void {
+    this.isPunched = true;
+    this.punchProgress = 0;
+    this.punchStartX = this.position.pixelX;
+    this.punchStartY = this.position.pixelY;
+    this.punchTargetX = targetGridX * TILE_SIZE;
+    this.punchTargetY = targetGridY * TILE_SIZE;
+    EventBus.emit('bomb-punched', {
+      bomb: this,
+      targetGridX,
+      targetGridY
+    });
   }
 }
