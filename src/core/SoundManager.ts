@@ -4,6 +4,7 @@ type SoundType =
   | 'explosionIce'
   | 'explosionFire'
   | 'bombPlace'
+  | 'bombKick'
   | 'powerUp'
   | 'powerUpBad'
   | 'playerDeath'
@@ -58,6 +59,9 @@ class SoundManagerClass {
           break;
         case 'bombPlace':
           this.playBombPlace(ctx);
+          break;
+        case 'bombKick':
+          this.playBombKick(ctx);
           break;
         case 'powerUp':
           this.playPowerUp(ctx);
@@ -232,6 +236,40 @@ class SoundManagerClass {
 
     osc.start(now);
     osc.stop(now + 0.1);
+  }
+
+  private playBombKick(ctx: AudioContext): void {
+    const now = ctx.currentTime;
+
+    // Whoosh sound for kick
+    const bufferSize = ctx.sampleRate * 0.15;
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < bufferSize; i++) {
+      const t = i / bufferSize;
+      const envelope = Math.sin(t * Math.PI) * (1 - t * t);
+      data[i] = (Math.random() * 2 - 1) * envelope;
+    }
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(800, now);
+    filter.frequency.linearRampToValueAtTime(300, now + 0.15);
+    filter.Q.value = 2;
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.3 * this.masterVolume, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+
+    noise.start(now);
   }
 
   private playPowerUp(ctx: AudioContext): void {

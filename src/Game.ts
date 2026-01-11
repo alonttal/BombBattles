@@ -63,6 +63,7 @@ export class Game {
   private setupEventListeners(): void {
     EventBus.on('bomb-placed', this.onBombPlaced.bind(this));
     EventBus.on('bomb-explode', this.onBombExplode.bind(this));
+    EventBus.on('bomb-landed', this.onBombLanded.bind(this));
     EventBus.on('block-destroyed', this.onBlockDestroyed.bind(this));
     EventBus.on('player-died', this.onPlayerDied.bind(this));
   }
@@ -233,6 +234,11 @@ export class Game {
         // Human player input
         direction = this.inputManager.getMovementDirection(player.playerIndex);
         shouldPlaceBomb = this.inputManager.isBombPressed(player.playerIndex);
+
+        // Check for punch input
+        if (this.inputManager.isSpecialPressed(player.playerIndex)) {
+          this.tryPunchBomb(player);
+        }
       }
 
       // Apply movement
@@ -258,6 +264,13 @@ export class Game {
 
     for (const bomb of this.bombs) {
       bomb.update(deltaTime);
+    }
+
+    // Update sliding bombs
+    for (const bomb of this.bombs) {
+      if (bomb.isSliding && bomb.slideDirection) {
+        this.updateSlidingBomb(bomb, deltaTime);
+      }
     }
 
     for (const block of this.blocks) {
@@ -453,10 +466,20 @@ export class Game {
         break;
       }
 
-      // Check if there's a bomb at this position (players can't walk through bombs they didn't just place)
-      if (entity instanceof Bomb && entity.owner !== player) {
-        canMove = false;
-        break;
+      // Check if there's a bomb at this position
+      if (entity instanceof Bomb) {
+        // If player has KICK ability and bomb is not sliding, kick it
+        if (player.hasAbility('kick') && !entity.isSliding) {
+          entity.kick(direction);
+          SoundManager.play('bombKick');
+          // Player can pass through the bomb they just kicked
+          continue;
+        }
+        // Otherwise, block movement (can't walk through bombs)
+        if (entity.owner !== player || entity.isSliding) {
+          canMove = false;
+          break;
+        }
       }
     }
 
@@ -499,6 +522,85 @@ export class Game {
     }
   }
 
+  private updateSlidingBomb(bomb: Bomb, deltaTime: number): void {
+    if (!bomb.slideDirection) return;
+
+    const moveAmount = bomb.slideSpeed * TILE_SIZE * deltaTime;
+    let newPixelX = bomb.position.pixelX;
+    let newPixelY = bomb.position.pixelY;
+
+    // Calculate new position based on slide direction
+    switch (bomb.slideDirection) {
+      case Direction.UP:
+        newPixelY -= moveAmount;
+        break;
+      case Direction.DOWN:
+        newPixelY += moveAmount;
+        break;
+      case Direction.LEFT:
+        newPixelX -= moveAmount;
+        break;
+      case Direction.RIGHT:
+        newPixelX += moveAmount;
+        break;
+    }
+
+    // Calculate target grid position
+    const newGridX = Math.round(newPixelX / TILE_SIZE);
+    const newGridY = Math.round(newPixelY / TILE_SIZE);
+
+    // Check if bomb should stop sliding
+    let shouldStop = false;
+
+    // Check bounds
+    if (newGridX < 0 || newGridX >= GRID_WIDTH || newGridY < 0 || newGridY >= GRID_HEIGHT) {
+      shouldStop = true;
+    }
+
+    // Check for obstacles in target position
+    if (!shouldStop && this.grid[newGridY] && this.grid[newGridY][newGridX]) {
+      const entity = this.grid[newGridY][newGridX];
+      if (entity instanceof Block || entity instanceof Bomb) {
+        shouldStop = true;
+      }
+    }
+
+    if (shouldStop) {
+      bomb.stopSliding();
+      // Update grid with stopped bomb
+      const oldGridX = bomb.position.gridX;
+      const oldGridY = bomb.position.gridY;
+      if (this.grid[oldGridY][oldGridX] === bomb) {
+        this.grid[oldGridY][oldGridX] = null;
+      }
+      this.grid[bomb.position.gridY][bomb.position.gridX] = bomb;
+    } else {
+      // Update bomb position
+      const oldGridX = bomb.position.gridX;
+      const oldGridY = bomb.position.gridY;
+
+      bomb.position.pixelX = newPixelX;
+      bomb.position.pixelY = newPixelY;
+      bomb.position.gridX = newGridX;
+      bomb.position.gridY = newGridY;
+
+      // Update grid if position changed
+      if (oldGridX !== newGridX || oldGridY !== newGridY) {
+        if (this.grid[oldGridY][oldGridX] === bomb) {
+          this.grid[oldGridY][oldGridX] = null;
+        }
+        this.grid[newGridY][newGridX] = bomb;
+      }
+
+      // Emit kick trail particles
+      this.renderer.getParticleSystem().emitPreset(
+        'kickTrail',
+        bomb.position.pixelX + TILE_SIZE / 2,
+        bomb.position.pixelY + TILE_SIZE / 2
+      );
+    }
+  }
+
   private tryPlaceBomb(player: Player): void {
     if (!player.canPlaceBomb()) return;
 
@@ -516,8 +618,124 @@ export class Game {
     SoundManager.play('bombPlace');
   }
 
+  private tryPunchBomb(player: Player): void {
+    if (!player.hasAbility('punch')) return;
+
+    const direction = player.getDirection();
+
+    // Check adjacent tile in facing direction for a bomb
+    let checkX = player.position.gridX;
+    let checkY = player.position.gridY;
+
+    switch (direction) {
+      case Direction.UP:
+        checkY -= 1;
+        break;
+      case Direction.DOWN:
+        checkY += 1;
+        break;
+      case Direction.LEFT:
+        checkX -= 1;
+        break;
+      case Direction.RIGHT:
+        checkX += 1;
+        break;
+    }
+
+    // Check if there's a bomb at the adjacent position
+    if (checkX < 0 || checkX >= GRID_WIDTH || checkY < 0 || checkY >= GRID_HEIGHT) return;
+
+    const entity = this.grid[checkY][checkX];
+    if (!(entity instanceof Bomb) || entity.isPunched || entity.isSliding) return;
+
+    // Calculate target position (4 tiles away)
+    const punchDistance = 4;
+    let targetX = checkX;
+    let targetY = checkY;
+
+    switch (direction) {
+      case Direction.UP:
+        targetY = checkY - punchDistance;
+        break;
+      case Direction.DOWN:
+        targetY = checkY + punchDistance;
+        break;
+      case Direction.LEFT:
+        targetX = checkX - punchDistance;
+        break;
+      case Direction.RIGHT:
+        targetX = checkX + punchDistance;
+        break;
+    }
+
+    // Clamp to grid bounds
+    targetX = Math.max(0, Math.min(GRID_WIDTH - 1, targetX));
+    targetY = Math.max(0, Math.min(GRID_HEIGHT - 1, targetY));
+
+    // Find first obstacle in path and stop before it
+    let dx = 0, dy = 0;
+    switch (direction) {
+      case Direction.UP: dy = -1; break;
+      case Direction.DOWN: dy = 1; break;
+      case Direction.LEFT: dx = -1; break;
+      case Direction.RIGHT: dx = 1; break;
+    }
+
+    let finalX = checkX;
+    let finalY = checkY;
+
+    for (let i = 1; i <= punchDistance; i++) {
+      const testX = checkX + dx * i;
+      const testY = checkY + dy * i;
+
+      if (testX < 0 || testX >= GRID_WIDTH || testY < 0 || testY >= GRID_HEIGHT) {
+        break;
+      }
+
+      const obstacle = this.grid[testY][testX];
+      if (obstacle instanceof Block) {
+        break;
+      }
+
+      finalX = testX;
+      finalY = testY;
+    }
+
+    // Clear bomb from old grid position
+    this.grid[checkY][checkX] = null;
+
+    // Punch the bomb
+    entity.punch(finalX, finalY);
+
+    // Trigger player punch animation
+    player.startPunchAnimation();
+
+    // Play punch sound
+    SoundManager.play('powerUp'); // Using powerUp sound temporarily
+
+    // Camera shake
+    this.renderer.getCamera().shake({ duration: 0.15, intensity: 3, frequency: 25 });
+  }
+
   private onBombPlaced(_data: { gridX: number; gridY: number; owner: Player }): void {
     // Event handling is done in tryPlaceBomb
+  }
+
+  private onBombLanded(data: { bomb: Bomb; gridX: number; gridY: number }): void {
+    const { bomb, gridX, gridY } = data;
+
+    // Update grid with bomb at new position
+    this.grid[gridY][gridX] = bomb;
+
+    // Impact particles
+    this.renderer.getParticleSystem().emitPreset(
+      'debris',
+      gridX * TILE_SIZE + TILE_SIZE / 2,
+      gridY * TILE_SIZE + TILE_SIZE / 2
+    );
+
+    // Camera shake
+    this.renderer.getCamera().shake({ duration: 0.15, intensity: 3, frequency: 25 });
   }
 
   private onBombExplode(data: { bomb: Bomb; gridX: number; gridY: number; range: number; type: BombType }): void {

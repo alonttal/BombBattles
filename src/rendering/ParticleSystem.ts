@@ -149,6 +149,18 @@ export const PARTICLE_PRESETS = {
     size: { min: 100, max: 200 },
     colors: ['#ffffff'],
     shape: 'ring' as const
+  },
+
+  kickTrail: {
+    count: 3,
+    spread: 8,
+    speed: { min: 10, max: 30 },
+    lifetime: { min: 0.2, max: 0.4 },
+    size: { min: 3, max: 6 },
+    colors: ['#ffffff', '#ffcc00', '#ff8800'],
+    gravity: 0,
+    friction: 0.95,
+    shape: 'circle' as const
   }
 };
 
