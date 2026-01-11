@@ -7,13 +7,14 @@ interface KeyBinding {
   right: string;
   bomb: string;
   special: string;
+  teleport: string;
 }
 
 const DEFAULT_BINDINGS: Map<number, KeyBinding> = new Map([
-  [0, { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', bomb: 'Slash', special: 'Period' }],
-  [1, { up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', bomb: 'Space', special: 'KeyE' }],
-  [2, { up: 'KeyI', down: 'KeyK', left: 'KeyJ', right: 'KeyL', bomb: 'KeyO', special: 'KeyU' }],
-  [3, { up: 'Numpad8', down: 'Numpad5', left: 'Numpad4', right: 'Numpad6', bomb: 'Numpad0', special: 'NumpadEnter' }]
+  [0, { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', bomb: 'Slash', special: 'Period', teleport: 'KeyT' }],
+  [1, { up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', bomb: 'Space', special: 'KeyE', teleport: 'KeyR' }],
+  [2, { up: 'KeyI', down: 'KeyK', left: 'KeyJ', right: 'KeyL', bomb: 'KeyO', special: 'KeyU', teleport: 'KeyY' }],
+  [3, { up: 'Numpad8', down: 'Numpad5', left: 'Numpad4', right: 'Numpad6', bomb: 'Numpad0', special: 'NumpadEnter', teleport: 'NumpadComma' }]
 ]);
 
 export class InputManager {
@@ -83,6 +84,12 @@ export class InputManager {
     const binding = this.bindings.get(playerId);
     if (!binding) return false;
     return this.justPressed.has(binding.special);
+  }
+
+  isTeleportPressed(playerId: number): boolean {
+    const binding = this.bindings.get(playerId);
+    if (!binding) return false;
+    return this.justPressed.has(binding.teleport);
   }
 
   isKeyPressed(code: string): boolean {

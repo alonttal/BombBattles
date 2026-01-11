@@ -1,9 +1,11 @@
 import { CANVAS_WIDTH, CANVAS_HEIGHT, TILE_SIZE, GRID_WIDTH, GRID_HEIGHT, COLORS } from '../constants';
-import { Player } from '../entities/Player';
+import { Player, BombType } from '../entities/Player';
 import { Bomb } from '../entities/Bomb';
 import { Block } from '../entities/Block';
 import { Explosion } from '../entities/Explosion';
 import { PowerUp } from '../entities/PowerUp';
+import { FloatingText } from './FloatingText';
+import { ScoreManager } from '../core/ScoreManager';
 import { ParticleSystem } from './ParticleSystem';
 import { Camera } from './Camera';
 
@@ -13,6 +15,8 @@ export interface RenderState {
   blocks: Block[];
   explosions: Explosion[];
   powerUps: PowerUp[];
+  floatingTexts: FloatingText[];
+  scores: ScoreManager;
 }
 
 export class Renderer {
@@ -26,10 +30,14 @@ export class Renderer {
   private lightingCanvas: HTMLCanvasElement;
   private lightingCtx: CanvasRenderingContext2D;
 
+  // Screen juice
+  private colorOverlay: string | null = null;
+  private colorOverlayAlpha: number = 0;
+  private colorOverlayDuration: number = 0;
+  private colorOverlayTimer: number = 0;
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d')!;
-    this.particleSystem = new ParticleSystem();
     this.ctx = canvas.getContext('2d')!;
     this.particleSystem = new ParticleSystem();
     this.camera = new Camera();
@@ -111,6 +119,25 @@ export class Renderer {
   update(deltaTime: number): void {
     this.particleSystem.update(deltaTime);
     this.camera.update(deltaTime);
+
+    // Update color overlay
+    if (this.colorOverlay) {
+      this.colorOverlayTimer += deltaTime;
+      if (this.colorOverlayTimer >= this.colorOverlayDuration) {
+        this.colorOverlay = null;
+        this.colorOverlayAlpha = 0;
+      } else {
+        // Fade out
+        this.colorOverlayAlpha = 1 - (this.colorOverlayTimer / this.colorOverlayDuration);
+      }
+    }
+  }
+
+  triggerColorFlash(color: string, duration: number): void {
+    this.colorOverlay = color;
+    this.colorOverlayDuration = duration;
+    this.colorOverlayTimer = 0;
+    this.colorOverlayAlpha = 1;
   }
 
   render(state: RenderState, interpolation: number): void {
@@ -128,9 +155,9 @@ export class Renderer {
     this.ctx.fillStyle = gradient;
     this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    // Apply camera transform (for screen shake)
+    // Apply camera transform
     this.ctx.save();
-    this.camera.applyTransform(this.ctx);
+    this.camera.applyCenteredTransform(this.ctx, CANVAS_WIDTH, CANVAS_HEIGHT);
 
     // Draw ground
     this.renderGround();
@@ -173,17 +200,29 @@ export class Renderer {
     }
 
     // Draw particles (on top of explosions)
-    // Draw particles (on top of explosions)
     this.particleSystem.render(this.ctx);
 
-    // Draw lighting overlay
-    this.renderLighting(state);
+    // Draw floating texts
+    for (const text of state.floatingTexts) {
+      text.render(this.ctx);
+    }
 
-    // Restore transform before UI rendering
+    // Draw lighting overlay (Disabled temporarily to debug grey screen issue)
+    // this.renderLighting(state);
 
-    // Restore transform before UI rendering
-    this.ctx.restore(); // Restore camera transform
-    this.ctx.restore(); // Restore scale
+    // Restore camera transform
+    this.ctx.restore();
+    // Restore scale translation
+    this.ctx.restore();
+
+    // Draw color overlay (fullscreen, unaffected by camera)
+    if (this.colorOverlay) {
+      this.ctx.save();
+      this.ctx.fillStyle = this.colorOverlay;
+      this.ctx.globalAlpha = this.colorOverlayAlpha * 0.3; // Max 30% opacity
+      this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+      this.ctx.restore();
+    }
   }
 
   getParticleSystem(): ParticleSystem {
@@ -196,160 +235,475 @@ export class Renderer {
 
   private renderGround(): void {
     const ctx = this.ctx;
-    // Draw checkered ground pattern with depth and texture
+    // Draw enhanced grass tiles with depth and organic texture
     for (let y = 0; y < GRID_HEIGHT; y++) {
       for (let x = 0; x < GRID_WIDTH; x++) {
         const isLight = (x + y) % 2 === 0;
         const px = x * TILE_SIZE;
         const py = y * TILE_SIZE;
 
-        // Base tile color - bright, happy greens!
-        const baseColor = isLight ? '#7FD957' : '#6BBF59'; // Light/Dark pattern
-
-        ctx.fillStyle = baseColor;
+        // Base gradient for 3D depth
+        const gradient = ctx.createLinearGradient(px, py, px + TILE_SIZE, py + TILE_SIZE);
+        if (isLight) {
+          gradient.addColorStop(0, '#8AE35F'); // Lighter green
+          gradient.addColorStop(0.5, '#7FD957');
+          gradient.addColorStop(1, '#6DC94D'); // Slightly darker
+        } else {
+          gradient.addColorStop(0, '#75CF52');
+          gradient.addColorStop(0.5, '#6BBF59');
+          gradient.addColorStop(1, '#5DAF4B');
+        }
+        ctx.fillStyle = gradient;
         ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
 
-        // Add "Grass" texture patches
-        if ((x * 17 + y * 23) % 5 === 0) { // Deterministic random-ish pattern
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
-          ctx.fillRect(px + 10, py + 10, 4, 4);
-          ctx.fillRect(px + 20, py + 30, 6, 6);
-        }
-        if ((x * 7 + y * 13) % 7 === 0) {
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.05)'; // Highlight tuft
-          ctx.fillRect(px + 30, py + 15, 3, 3);
+        // Seeded random based on tile position for consistent patterns
+        const seed = x * 17 + y * 31;
+
+        // Grass blade details (small vertical strokes)
+        ctx.strokeStyle = 'rgba(0, 80, 0, 0.15)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 5; i++) {
+          const bladeX = px + ((seed * (i + 1) * 7) % (TILE_SIZE - 4)) + 2;
+          const bladeY = py + ((seed * (i + 2) * 11) % (TILE_SIZE - 8)) + 4;
+          ctx.beginPath();
+          ctx.moveTo(bladeX, bladeY + 4);
+          ctx.lineTo(bladeX + ((i % 2) ? 1 : -1), bladeY);
+          ctx.stroke();
         }
 
-        // Add grid lines (subtle)
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.05)';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE);
+        // Light patches (sun spots)
+        if (seed % 7 === 0) {
+          ctx.fillStyle = 'rgba(255, 255, 200, 0.08)';
+          ctx.beginPath();
+          ctx.ellipse(px + 20 + (seed % 15), py + 15 + (seed % 12), 8, 6, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
 
-        // Add subtle inner highlight
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+        // Small flowers/clovers (rare)
+        if (seed % 13 === 0) {
+          const flowerX = px + 10 + (seed % 25);
+          const flowerY = py + 10 + ((seed * 3) % 25);
+          // Flower center
+          ctx.fillStyle = seed % 2 === 0 ? '#FFE066' : '#FF9999';
+          ctx.beginPath();
+          ctx.arc(flowerX, flowerY, 2, 0, Math.PI * 2);
+          ctx.fill();
+          // Petals (simple dots around)
+          ctx.fillStyle = '#ffffff';
+          for (let p = 0; p < 4; p++) {
+            const angle = (p / 4) * Math.PI * 2;
+            ctx.beginPath();
+            ctx.arc(flowerX + Math.cos(angle) * 3, flowerY + Math.sin(angle) * 3, 1, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        // Subtle tile border shadow
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.06)';
         ctx.lineWidth = 1;
-        ctx.strokeRect(px + 2, py + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+        ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
       }
     }
   }
 
-  renderUI(alivePlayers: Player[], roundTime: number): void {
+  // UI Layout Constants (Compact)
+  private readonly CARD_WIDTH = 130;
+  private readonly CARD_HEIGHT = 40;
+  private readonly AVATAR_RADIUS = 18;
+  private readonly UI_PADDING = 8;
+
+  renderUI(alivePlayers: Player[], roundTime: number, scoreManager?: ScoreManager): void {
     this.ctx.save();
     this.ctx.scale(this.scale, this.scale);
 
-    // Draw HUD at the top with gradient
-    const hudGradient = this.ctx.createLinearGradient(0, 0, 0, 50);
-    hudGradient.addColorStop(0, 'rgba(0, 0, 0, 0.85)');
-    hudGradient.addColorStop(1, 'rgba(0, 0, 0, 0.5)');
-    this.ctx.fillStyle = hudGradient;
-    const uiHeight = 50;
+    // No full-width HUD gradient (it obscures the game)
 
-    // UI Background Bar
-    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-    this.ctx.fillRect(0, 0, CANVAS_WIDTH, uiHeight);
-
-    // Calculate positions
+    // --- TIMER PANEL (Top Center, Compact) ---
     const centerX = CANVAS_WIDTH / 2;
-    const padding = 20;
+    const timerWidth = 70;
+    const timerHeight = 28;
+    const timerX = centerX - timerWidth / 2;
+    const timerY = 5;
 
-    // Draw Timer (Center)
+    // Glass Panel Background
+    this.ctx.fillStyle = 'rgba(30, 30, 30, 0.6)';
+    this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    this.ctx.lineWidth = 1;
+    this.ctx.beginPath();
+    this.ctx.roundRect(timerX, timerY, timerWidth, timerHeight, 12);
+    this.ctx.fill();
+    this.ctx.stroke();
+
+    // Timer Text (Digital Style)
     const minutes = Math.floor(roundTime / 60);
     const seconds = Math.floor(roundTime % 60);
     const timeText = `${minutes}:${seconds.toString().padStart(2, '0')}`;
 
-    this.ctx.fillStyle = roundTime <= 30 ? '#ff5555' : '#ffffff';
-    this.ctx.font = 'bold 28px Arial';
+    this.ctx.font = '700 16px "Courier New", monospace';
     this.ctx.textAlign = 'center';
     this.ctx.textBaseline = 'middle';
 
-    // Timer Glow
+    // Warning Glow
     if (roundTime <= 30) {
-      this.ctx.shadowColor = '#ff0000';
-      this.ctx.shadowBlur = 10 + Math.sin(Date.now() / 100) * 10;
+      this.ctx.shadowColor = '#ff2222';
+      this.ctx.shadowBlur = 15;
+      this.ctx.fillStyle = '#ff5555';
+    } else {
+      this.ctx.shadowBlur = 0;
+      this.ctx.fillStyle = '#ffffff';
     }
-    this.ctx.fillText(timeText, centerX, uiHeight / 2);
+    this.ctx.fillText(timeText, centerX, timerY + timerHeight / 2 - 2);
     this.ctx.shadowBlur = 0;
 
-    // Draw Players (Distributed)
-    // P1 (Left), P2 (Left-Center), P3 (Right-Center), P4 (Right)?
-    // Or just spread them out evenly.
+    // Progress Bar (Bottom of Timer)
+    const totalTime = 180; // Assuming 3 mins default round
+    const progress = Math.max(0, roundTime / totalTime);
+    const barWidth = (timerWidth - 20) * progress;
+    this.ctx.fillStyle = roundTime <= 30 ? '#ff5555' : '#44aaff';
+    this.ctx.fillRect(timerX + 10, timerY + timerHeight - 6, barWidth, 3);
 
-    // Fixed slots layout to avoid overlap:
-    // P1: 0 to width/4
-    // P2: width/4 to width/2 (avoid center)
-    // P3: width/2 to 3*width/4
-    // P4: 3*width/4 to width
 
-    // Actually, P1 & P2 Left, P3 & P4 Right. Timer in middle.
-    // P1: Left Edge + padding
-    // P2: Left Edge + 120px
-    // P3: Right Edge - 120px
-    // P4: Right Edge - padding
-
+    // --- PLAYER CARDS (4 Corners) ---
     const slots = [
-      { x: padding + 20, align: 'left' as const },
-      { x: padding + 160, align: 'left' as const },
-      { x: CANVAS_WIDTH - padding - 160, align: 'right' as const },
-      { x: CANVAS_WIDTH - padding - 20, align: 'right' as const }
+      { x: this.UI_PADDING, y: 5, align: 'left' as const }, // P1 Top-Left
+      { x: CANVAS_WIDTH - this.UI_PADDING - this.CARD_WIDTH, y: 5, align: 'right' as const }, // P2 Top-Right
+      { x: this.UI_PADDING, y: CANVAS_HEIGHT - this.CARD_HEIGHT - 5, align: 'left' as const }, // P3 Bottom-Left
+      { x: CANVAS_WIDTH - this.UI_PADDING - this.CARD_WIDTH, y: CANVAS_HEIGHT - this.CARD_HEIGHT - 5, align: 'right' as const } // P4 Bottom-Right
     ];
 
-    // We should iterate through the passed players array using their playerIndex to determine slot.
-    for (const player of alivePlayers) { // Assuming this is actually "allPlayers" based on Game.ts logic usage
+    for (const player of alivePlayers) {
       const i = player.playerIndex;
-      if (i >= 4) continue; // Max 4 slots support
+      if (i >= 4) continue;
 
       const slot = slots[i];
       const isAlive = player.isPlayerAlive();
+      const cardX = slot.x;
+      const cardY = slot.y;
 
-      let x = slot.x;
-      const y = uiHeight / 2;
+      this.drawPlayerCard(cardX, cardY, player, i, isAlive, scoreManager);
+    }
 
-      // Avatar circle
-      const radius = 16;
+    this.ctx.restore();
+  }
 
-      this.ctx.shadowBlur = 0;
+  private drawPlayerCard(x: number, y: number, player: Player, index: number, isAlive: boolean, scoreManager?: ScoreManager): void {
+    const ctx = this.ctx;
+    const colors = [COLORS.player1, COLORS.player2, COLORS.player3, COLORS.player4];
+    const playerColor = colors[index];
+    const borderColor = isAlive ? playerColor : '#555555';
 
-      // Draw avatar background
-      const colors = [COLORS.player1, COLORS.player2, COLORS.player3, COLORS.player4];
-      this.ctx.fillStyle = isAlive ? colors[i] : '#444444';
-      this.ctx.beginPath();
-      this.ctx.arc(x, y, radius, 0, Math.PI * 2);
-      this.ctx.fill();
+    // 1. Card Background (Gradient)
+    const gradient = ctx.createLinearGradient(x, y, x + this.CARD_WIDTH, y);
+    if (index % 2 === 0) { // Left aligned
+      gradient.addColorStop(0, 'rgba(40, 40, 40, 0.9)');
+      gradient.addColorStop(1, 'rgba(40, 40, 40, 0.6)');
+    } else { // Right aligned
+      gradient.addColorStop(0, 'rgba(40, 40, 40, 0.6)');
+      gradient.addColorStop(1, 'rgba(40, 40, 40, 0.9)');
+    }
 
-      // Face/Number
-      this.ctx.fillStyle = '#ffffff';
-      this.ctx.font = 'bold 12px Arial';
-      this.ctx.textAlign = 'center';
-      this.ctx.textBaseline = 'middle';
-      this.ctx.fillText(`P${i + 1}`, x, y);
+    ctx.fillStyle = gradient;
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = 2; // Thicker border for visibility
 
-      // Stats (Bomb & Power)
-      if (isAlive) {
-        const statX = slot.align === 'left' ? x + radius + 10 : x - radius - 10;
-        const align = slot.align;
+    // Shadow
+    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetY = 4;
 
-        this.ctx.textAlign = align;
-        this.ctx.font = 'bold 12px Arial';
+    ctx.beginPath();
+    ctx.roundRect(x, y, this.CARD_WIDTH, this.CARD_HEIGHT, 10);
+    ctx.fill();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
 
-        // Bombs
-        this.ctx.fillStyle = '#ffffff';
-        const bombText = `💣 ${player.activeBombs}/${player.maxBombs}`;
-        this.ctx.fillText(bombText, statX, y - 6);
+    // Inner glow effect
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(x + 2, y + 2, this.CARD_WIDTH - 4, this.CARD_HEIGHT - 4, 8);
+    ctx.stroke();
 
-        // Range
-        this.ctx.fillStyle = '#ffaa00';
-        const rangeText = `🔥 ${player.bombRange}`;
-        this.ctx.fillText(rangeText, statX, y + 8);
+    // 2. Avatar (Inside card, not overlapping edge)
+    const isLeft = (index % 2 === 0);
+    // Avatar is now inside the card with padding
+    const avatarX = isLeft ? x + this.AVATAR_RADIUS + 4 : x + this.CARD_WIDTH - this.AVATAR_RADIUS - 4;
+    const avatarY = y + this.CARD_HEIGHT / 2;
+
+    this.drawAvatar(avatarX, avatarY, this.AVATAR_RADIUS, playerColor, isAlive, false);
+
+    // 3. Content Layout - Simplified for compact cards
+    // Content starts after avatar
+    const contentX = isLeft ? x + this.AVATAR_RADIUS * 2 + 8 : x + 5;
+    const contentWidth = this.CARD_WIDTH - this.AVATAR_RADIUS * 2 - 12;
+
+    if (isAlive) {
+      // Single Row Layout: P# | Score | Bomb/Range
+
+      // Player ID
+      ctx.fillStyle = playerColor;
+      ctx.font = 'bold 9px Arial';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`P${index + 1}`, contentX, y + 12);
+
+      // Star icon for score
+      ctx.fillStyle = '#FFD700';
+      ctx.font = '10px Arial';
+      ctx.fillText('★', contentX + 15, y + 12);
+
+      // Score (Gold, prominent)
+      ctx.font = 'bold 14px Arial';
+      ctx.textAlign = 'left';
+      const score = scoreManager ? scoreManager.getScore(index) : 0;
+      ctx.fillText(`${score}`, contentX + 26, y + 12);
+
+      // Stats Row: Bomb icon + count, Blast icon + range
+      const statsY = y + 28;
+
+      // Bomb: Icon + Count
+      this.drawBombIcon(contentX + 2, statsY, 5, player.bombType);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 9px Arial';
+      ctx.textAlign = 'left';
+      ctx.fillText(`${player.maxBombs}`, contentX + 12, statsY);
+
+      // Blast: Icon + Range
+      this.drawBlastIcon(contentX + 35, statsY, 5);
+      ctx.fillStyle = '#ffaa00';
+      ctx.fillText(`${player.bombRange}`, contentX + 45, statsY);
+
+      // Ability indicator (small dot if any ability)
+      if (player.hasAbility('kick') || player.hasAbility('punch') || player.hasShield() || player.teleportCharges > 0) {
+        ctx.fillStyle = '#00ffff';
+        ctx.beginPath();
+        ctx.arc(contentX + 65, statsY, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      // Dead State
+      ctx.fillStyle = '#666666';
+      ctx.font = 'italic 10px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText("OUT", contentX + contentWidth / 2, y + this.CARD_HEIGHT / 2);
+    }
+  }
+
+  private drawStatText(text: string, x: number, y: number) {
+    this.ctx.fillStyle = '#ffffff';
+    this.ctx.font = 'bold 11px Arial';
+    this.ctx.textAlign = 'left';
+    this.ctx.textBaseline = 'middle';
+    this.ctx.fillText(text, x, y);
+  }
+
+  private drawStatIcon(x: number, y: number, type: 'bomb' | 'blast', bombType: BombType) {
+    if (type === 'bomb') {
+      this.drawBombIcon(x, y, 6, bombType);
+    } else {
+      this.drawBlastIcon(x, y, 6);
+    }
+  }
+
+  private drawAvatar(x: number, y: number, radius: number, color: string, isAlive: boolean, isWinner: boolean): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Sticker Outline (White stroke outside)
+    ctx.beginPath();
+    ctx.arc(0, 0, radius + 2, 0, Math.PI * 2);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Background
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+    ctx.fillStyle = isAlive ? color : '#333333';
+    ctx.fill();
+
+    // Inner Shadow (Simulated with gradient)
+    const grad = ctx.createRadialGradient(-5, -5, 2, 0, 0, radius);
+    grad.addColorStop(0, 'rgba(255,255,255,0.2)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.1)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Face Drawing
+    if (!isAlive) {
+      // Dead Eyes (X)
+      ctx.strokeStyle = '#dddddd';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      // Left X
+      ctx.moveTo(-10, -6); ctx.lineTo(-4, 0);
+      ctx.moveTo(-4, -6); ctx.lineTo(-10, 0);
+      // Right X
+      ctx.moveTo(4, -6); ctx.lineTo(10, 0);
+      ctx.moveTo(10, -6); ctx.lineTo(4, 0);
+      ctx.stroke();
+
+      // Dead Line Mouth
+      ctx.beginPath();
+      ctx.moveTo(-8, 8);
+      ctx.lineTo(8, 8);
+      ctx.stroke();
+    } else {
+      // Alive Faces
+      ctx.fillStyle = '#ffffff';
+
+      if (isWinner) {
+        // Happy Arches
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(-6, -2, 4, Math.PI, 0); // Arch
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(6, -2, 4, Math.PI, 0); // Arch
+        ctx.stroke();
+
+        // Big Grin
+        ctx.beginPath();
+        ctx.arc(0, 2, 8, 0.1, Math.PI - 0.1);
+        ctx.stroke();
+
+        // Crown
+        ctx.fillStyle = '#FFD700';
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(-12, -radius + 5);
+        ctx.lineTo(-6, -radius - 8);
+        ctx.lineTo(0, -radius - 2);
+        ctx.lineTo(6, -radius - 8);
+        ctx.lineTo(12, -radius + 5);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
       } else {
-        // Dead Marker
-        const textX = slot.align === 'left' ? x + radius + 10 : x - radius - 10;
-        this.ctx.textAlign = slot.align;
-        this.ctx.fillStyle = '#777777';
-        this.ctx.font = 'italic 12px Arial';
-        this.ctx.fillText("DEAD", textX, y);
+        // Normal Eyes (Dots)
+        ctx.beginPath();
+        ctx.arc(-6, -3, 3, 0, Math.PI * 2);
+        ctx.arc(6, -3, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Simple Smile
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, 4, 6, 0.3, Math.PI - 0.3);
+        ctx.stroke();
       }
     }
-    this.ctx.restore();
+    ctx.restore();
+  }
+
+  private drawBombIcon(x: number, y: number, radius: number, type: BombType): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Bomb body
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+
+    // Color based on type
+    switch (type) {
+      case BombType.FIRE: ctx.fillStyle = '#FF4500'; break;
+      case BombType.ICE: ctx.fillStyle = '#00CED1'; break;
+      case BombType.PIERCING: ctx.fillStyle = '#9400D3'; break;
+      default: ctx.fillStyle = '#444444'; break;
+    }
+    ctx.fill();
+
+    // Shine
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.beginPath();
+    ctx.arc(-radius * 0.3, -radius * 0.3, radius * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Fuse
+    ctx.strokeStyle = '#8B4513';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, -radius);
+    ctx.lineTo(radius * 0.5, -radius * 1.5);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  private drawBlastIcon(x: number, y: number, size: number): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = '#FF4400';
+
+    // Draw a "blast" star shape
+    ctx.beginPath();
+    const spikes = 8;
+    const outerRadius = size;
+    const innerRadius = size * 0.5;
+
+    for (let i = 0; i < spikes; i++) {
+      let angle = (Math.PI / spikes) * 2 * i;
+      const ox = Math.cos(angle) * outerRadius;
+      const oy = Math.sin(angle) * outerRadius;
+      ctx.lineTo(ox, oy);
+
+      angle += Math.PI / spikes;
+      const ix = Math.cos(angle) * innerRadius;
+      const iy = Math.sin(angle) * innerRadius;
+      ctx.lineTo(ix, iy);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Keep drawFireIcon for compatibility if used elsewhere, or just rename/replace logic if I can find usage.
+  // Actually, I'm replacing the method in the class.
+  private drawFireIcon(x: number, y: number, size: number): void {
+    this.drawBlastIcon(x, y, size);
+  }
+
+
+  private drawAbilityIcon(x: number, y: number, type: 'kick' | 'punch' | 'shield' | 'teleport'): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Background circle
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.beginPath();
+    ctx.arc(0, 0, 8, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 10px Arial';
+
+    switch (type) {
+      case 'kick':
+        ctx.fillText('👞', 0, 1); // Unicode shoe
+        break;
+      case 'punch':
+        ctx.fillText('🥊', 0, 1); // Unicode glove
+        break;
+      case 'shield':
+        ctx.fillText('🛡️', 0, 1); // Unicode shield
+        break;
+      case 'teleport':
+        ctx.fillText('🌀', 0, 1); // Unicode swirl
+        break;
+    }
+    ctx.restore();
   }
 
   renderCountdown(count: number): void {

@@ -21,6 +21,8 @@ import { Explosion, ExplosionTile } from './entities/Explosion';
 import { PowerUp, PowerUpType } from './entities/PowerUp';
 import { TileType, MapData, CLASSIC_MAP } from './map/TileTypes';
 import { AIController } from './ai/AIController';
+import { ScoreManager, ScoreEvent } from './core/ScoreManager';
+import { FloatingText } from './rendering/FloatingText';
 
 export class Game {
   private renderer: Renderer;
@@ -33,6 +35,9 @@ export class Game {
   private blocks: Block[] = [];
   private explosions: Explosion[] = [];
   private powerUps: PowerUp[] = [];
+  private floatingTexts: FloatingText[] = [];
+
+  private scoreManager: ScoreManager;
 
   private roundTime: number = ROUND_TIME;
   private countdownTime: number = COUNTDOWN_TIME;
@@ -58,6 +63,9 @@ export class Game {
 
     this.setupEventListeners();
     this.initializeGrid();
+
+    // Initialize with default 4 players max
+    this.scoreManager = new ScoreManager(4);
   }
 
   private setupEventListeners(): void {
@@ -66,6 +74,12 @@ export class Game {
     EventBus.on('bomb-landed', this.onBombLanded.bind(this));
     EventBus.on('block-destroyed', this.onBlockDestroyed.bind(this));
     EventBus.on('player-died', this.onPlayerDied.bind(this));
+    EventBus.on('score-changed', this.onScoreChanged.bind(this));
+    EventBus.on('teleport-start', this.onTeleportStart.bind(this));
+    EventBus.on('teleport-arrived', this.onTeleportArrived.bind(this));
+    EventBus.on('player-step', this.onPlayerStep.bind(this));
+    EventBus.on('player-trail', this.onPlayerTrail.bind(this));
+    EventBus.on('shield-consumed', this.onShieldConsumed.bind(this));
   }
 
   private initializeGrid(): void {
@@ -239,6 +253,11 @@ export class Game {
         if (this.inputManager.isSpecialPressed(player.playerIndex)) {
           this.tryPunchBomb(player);
         }
+
+        // Check for teleport input
+        if (this.inputManager.isTeleportPressed(player.playerIndex)) {
+          this.tryTeleport(player);
+        }
       }
 
       // Apply movement
@@ -285,6 +304,14 @@ export class Game {
       powerUp.update(deltaTime);
     }
 
+    for (const text of this.floatingTexts) {
+      text.update(deltaTime);
+    }
+    this.floatingTexts = this.floatingTexts.filter(t => t.active);
+
+    // Update score manager
+    this.scoreManager.update(deltaTime);
+
     // Clean up inactive entities
     this.bombs = this.bombs.filter(b => b.isActive);
     this.blocks = this.blocks.filter(b => b.isActive);
@@ -327,7 +354,7 @@ export class Game {
 
       case GamePhase.PLAYING:
         this.renderGameState(interpolation);
-        this.renderer.renderUI(this.players, this.roundTime);
+        this.renderer.renderUI(this.players, this.roundTime, this.scoreManager);
         break;
 
       case GamePhase.PAUSED:
@@ -349,7 +376,9 @@ export class Game {
       bombs: this.bombs,
       blocks: this.blocks,
       explosions: this.explosions,
-      powerUps: this.powerUps
+      powerUps: this.powerUps,
+      floatingTexts: this.floatingTexts,
+      scores: this.scoreManager
     };
     this.renderer.render(state, interpolation);
   }
@@ -361,6 +390,8 @@ export class Game {
     this.bombs = [];
     this.explosions = [];
     this.powerUps = [];
+    this.floatingTexts = [];
+    this.scoreManager = new ScoreManager(4);
     this.roundTime = ROUND_TIME;
     this.countdownTime = COUNTDOWN_TIME;
     this.winner = null;
@@ -414,6 +445,9 @@ export class Game {
   }
 
   private movePlayer(player: Player, direction: Direction, deltaTime: number): void {
+    const startPixelX = player.position.pixelX;
+    const startPixelY = player.position.pixelY;
+
     const speed = player.getEffectiveSpeed();
     const moveAmount = speed * TILE_SIZE * deltaTime;
 
@@ -470,16 +504,36 @@ export class Game {
       if (entity instanceof Bomb) {
         // If player has KICK ability and bomb is not sliding, kick it
         if (player.hasAbility('kick') && !entity.isSliding) {
+          // Kick logic remains...
+          // ...
           entity.kick(direction);
           SoundManager.play('bombKick');
-          // Player can pass through the bomb they just kicked
           continue;
         }
-        // Otherwise, block movement (can't walk through bombs)
-        if (entity.owner !== player || entity.isSliding) {
-          canMove = false;
-          break;
+
+        // Logic to allow moving OFF a bomb
+        // If we are currently ON the bomb, we should still be able to move
+        const bombGridX = entity.position.gridX;
+        const bombGridY = entity.position.gridY;
+        // If player is substantially "inside" the bomb, ignore collision to let them leave
+        // Standard Grid check:
+        const currentGridX = Math.round(player.position.pixelX / TILE_SIZE);
+        const currentGridY = Math.round(player.position.pixelY / TILE_SIZE);
+
+        if (currentGridX === bombGridX && currentGridY === bombGridY) {
+          // We are currently on this bomb, ignore collision to let us leave
+          continue;
         }
+
+        // If we get here, the player is NOT on the bomb tile
+        // Mark that the owner has left (for their own bombs)
+        if (entity.owner === player && !entity.ownerHasLeft) {
+          entity.ownerHasLeft = true;
+        }
+
+        // Block movement for ALL bombs (including own bombs once ownerHasLeft is true)
+        canMove = false;
+        break;
       }
     }
 
@@ -493,8 +547,33 @@ export class Game {
       this.tryCornerSlide(player, direction, deltaTime);
     }
 
-    // Update player direction for animation
-    player.move(direction, 0); // Just update direction, we already moved
+    const moved = Math.abs(player.position.pixelX - startPixelX) > 0.01 ||
+      Math.abs(player.position.pixelY - startPixelY) > 0.01;
+
+    if (moved) {
+      player.move(direction, 0); // Updates direction and sets isMoving = true
+    } else {
+      player.stopMoving(); // Ensure animation stops if blocked
+      // We still want to update direction if they are pressing the key?
+      // Usually yes, even if blocked, you face the wall.
+      // But player.move sets isMoving=true. 
+      // Let's manually set direction without setting isMoving=true
+      // We can add a method setFacing(direction) or just patch player.move
+      // Since we can't easily change Player.ts signature right now safely without checking usage...
+      // Let's assume player.direction is public or has a setter.
+      // It's private in Player.ts but move() sets it.
+      // Actually, let's just use player.move() but then immediately stopMoving() if blocked?
+      // That might cause a 1-frame jitter.
+
+      // Better: Check Player.ts. direction is private.
+      // But move() is the only way to set it?
+      // Let's look at Player.ts again. move() sets direction and isMoving=true.
+
+      // Workaround: Call move() then stopMoving().
+      // Since update() uses isMoving, if we set it to false immediately, it should be fine for the next frame.
+      player.move(direction, 0);
+      player.stopMoving();
+    }
   }
 
   private tryCornerSlide(player: Player, direction: Direction, deltaTime: number): void {
@@ -721,6 +800,86 @@ export class Game {
     // Event handling is done in tryPlaceBomb
   }
 
+  private tryTeleport(player: Player): void {
+    if (!player.canTeleport()) return;
+
+    // Determine target based on direction (3-4 tiles ahead)
+    const direction = player.getDirection();
+    const distance = 4;
+    let targetX = player.position.gridX;
+    let targetY = player.position.gridY;
+
+    switch (direction) {
+      case Direction.UP: targetY -= distance; break;
+      case Direction.DOWN: targetY += distance; break;
+      case Direction.LEFT: targetX -= distance; break;
+      case Direction.RIGHT: targetX += distance; break;
+    }
+
+    // Clamp to bounds
+    targetX = Math.max(1, Math.min(GRID_WIDTH - 2, targetX));
+    targetY = Math.max(1, Math.min(GRID_HEIGHT - 2, targetY));
+
+    // Refile if target is blocked (find nearest empty)
+    // Simple check: is target empty?
+    if (this.grid[targetY] && !this.grid[targetY][targetX]) {
+      // Valid empty tile
+      player.useTeleport(targetX, targetY);
+    } else {
+      // Play error sound?
+    }
+  }
+
+  private onTeleportStart(data: { player: Player }): void {
+    const player = data.player;
+    this.renderer.getParticleSystem().emitPreset(
+      'teleportOut',
+      player.position.pixelX + TILE_SIZE / 2,
+      player.position.pixelY + TILE_SIZE / 2
+    );
+    // SoundManager.play('teleport'); // Commented out until sound added
+  }
+
+  private onTeleportArrived(data: { player: Player }): void {
+    const player = data.player;
+    this.renderer.getParticleSystem().emitPreset(
+      'teleportIn',
+      player.position.pixelX + TILE_SIZE / 2,
+      player.position.pixelY + TILE_SIZE / 2
+    );
+  }
+
+  private onPlayerStep(data: { player: Player }): void {
+    const player = data.player;
+    this.renderer.getParticleSystem().emitPreset(
+      'footstep',
+      player.position.pixelX + TILE_SIZE / 2,
+      player.position.pixelY + TILE_SIZE - 4
+    );
+  }
+
+  private onPlayerTrail(data: { player: Player }): void {
+    const player = data.player;
+    const playerColors = [COLORS.player1, COLORS.player2, COLORS.player3, COLORS.player4];
+    this.renderer.getParticleSystem().emitPreset(
+      'speedTrail',
+      player.position.pixelX + TILE_SIZE / 2,
+      player.position.pixelY + TILE_SIZE / 2,
+      [playerColors[player.playerIndex]]
+    );
+  }
+
+  private onShieldConsumed(data: { player: Player }): void {
+    const player = data.player;
+    this.renderer.getParticleSystem().emitPreset(
+      'shieldBreak',
+      player.position.pixelX + TILE_SIZE / 2,
+      player.position.pixelY + TILE_SIZE / 2
+    );
+    SoundManager.play('shieldBreak'); // Assume sound exists or fallback
+    this.renderer.getCamera().shake({ duration: 0.1, intensity: 2, frequency: 20 });
+  }
+
   private onBombLanded(data: { bomb: Bomb; gridX: number; gridY: number }): void {
     const { bomb, gridX, gridY } = data;
 
@@ -771,6 +930,14 @@ export class Game {
         if (entity instanceof Block) {
           if (entity.isDestructible) {
             entity.startDestroy();
+            // Award points
+            this.scoreManager.addPoints(
+              bomb.owner.playerIndex,
+              10,
+              'block',
+              { x: tx * TILE_SIZE, y: ty * TILE_SIZE }
+            );
+
             this.grid[ty][tx] = null;
             tiles.push({ gridX: tx, gridY: ty, direction: dir, isEnd: true });
             if (type !== BombType.PIERCING) break;
@@ -874,7 +1041,24 @@ export class Game {
     }
   }
 
-  private onBlockDestroyed(data: { gridX: number; gridY: number }): void {
+  private onScoreChanged(event: ScoreEvent): void {
+    if (event.position) {
+      let color = '#ffffff';
+      if (event.amount >= 100) color = '#ffff00'; // Gold for big points
+      else if (event.amount < 0) color = '#ff0000'; // Red for negative
+
+      this.floatingTexts.push(new FloatingText({
+        x: event.position.x + TILE_SIZE / 2,
+        y: event.position.y,
+        text: event.amount > 0 ? `+${event.amount}` : `${event.amount}`,
+        color: color,
+        duration: 1.0,
+        velocity: { x: 0, y: -40 }
+      }));
+    }
+  }
+
+  private onBlockDestroyed(data: { gridX: number; gridY: number; destroyer?: Player }): void {
     // Add debris particles
     const centerX = data.gridX * TILE_SIZE + TILE_SIZE / 2;
     const centerY = data.gridY * TILE_SIZE + TILE_SIZE / 2;
@@ -1004,15 +1188,20 @@ export class Game {
         break;
       case PowerUpType.FIRE_BOMB:
         player.setBombType(BombType.FIRE);
+        this.renderer.triggerColorFlash('#ff4400', 0.2);
         break;
       case PowerUpType.ICE_BOMB:
         player.setBombType(BombType.ICE);
+        this.renderer.triggerColorFlash('#00ffff', 0.2);
         break;
       case PowerUpType.PIERCING_BOMB:
         player.setBombType(BombType.PIERCING);
+        this.renderer.triggerColorFlash('#ff00ff', 0.2);
         break;
       case PowerUpType.SKULL:
         this.applyRandomDebuff(player);
+        this.renderer.triggerColorFlash('#00ff00', 0.3); // Toxic green
+        this.renderer.getCamera().shake({ duration: 0.5, intensity: 5 });
         break;
     }
   }
@@ -1040,9 +1229,14 @@ export class Game {
 
     // Screen shake for dramatic effect
     camera.shakePreset('playerDeath');
+    this.renderer.triggerColorFlash('#ff0000', 0.5); // Red flash
 
     // Play death sound
     SoundManager.play('playerDeath');
+
+    // Zoom in slightly on death
+    camera.zoomTo(1.2, 0.2);
+    setTimeout(() => camera.zoomTo(1.0, 0.5), 1000);
 
     this.checkWinCondition();
   }
@@ -1055,6 +1249,9 @@ export class Game {
       this.phase = GamePhase.GAME_OVER;
       SoundManager.stopMusic();
       SoundManager.play('gameOver');
+
+      // Dramatic slow motion zoom? Or just zoom
+      this.renderer.getCamera().zoomTo(1.1, 1.0);
     }
   }
 

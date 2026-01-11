@@ -24,6 +24,10 @@ export class Bomb extends Entity {
   public punchTargetY: number = 0;
   public punchDuration: number = 0.5; // seconds
 
+  // Flag to track if the bomb owner has left the bomb's tile
+  // Once true, the owner cannot walk back onto the bomb
+  public ownerHasLeft: boolean = false;
+
   private pulseTimer: number = 0;
 
   constructor(gridX: number, gridY: number, owner: Player) {
@@ -111,31 +115,52 @@ export class Bomb extends Entity {
       ctx.globalAlpha = 1;
     }
 
-    // Bomb body with outline
-    ctx.shadowColor = this.getBombColor();
-    ctx.shadowBlur = 10;
-    ctx.fillStyle = this.getBombColor();
+    // Bomb body with 3D gradient
+    const bombRadius = size / 2;
+    const bodyGradient = ctx.createRadialGradient(
+      centerX - bombRadius * 0.3, centerY - bombRadius * 0.3, bombRadius * 0.1,
+      centerX, centerY, bombRadius
+    );
+
+    const baseColor = this.getBombColor();
+    // Lighter highlight at top-left
+    bodyGradient.addColorStop(0, this.lightenColor(baseColor, 60));
+    bodyGradient.addColorStop(0.3, this.lightenColor(baseColor, 20));
+    bodyGradient.addColorStop(0.7, baseColor);
+    bodyGradient.addColorStop(1, this.darkenColor(baseColor, 40));
+
+    ctx.shadowColor = baseColor;
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = bodyGradient;
     ctx.beginPath();
-    ctx.arc(centerX, centerY, size / 2, 0, Math.PI * 2);
+    ctx.arc(centerX, centerY, bombRadius, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
 
-    // Black outline for classic bomb look
+    // Bold black outline for classic cartoon bomb
     ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = 3;
     ctx.stroke();
 
-    // Highlight (shiny surface)
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    // Glossy highlight (main)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
     ctx.beginPath();
-    ctx.arc(centerX - 6, centerY - 6, 7, 0, Math.PI * 2);
+    ctx.ellipse(centerX - 5, centerY - 6, 6, 4, -0.5, 0, Math.PI * 2);
     ctx.fill();
 
-    // Smaller highlight for extra shine
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    // Small specular highlight
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
     ctx.beginPath();
-    ctx.arc(centerX - 4, centerY - 8, 3, 0, Math.PI * 2);
+    ctx.arc(centerX - 3, centerY - 9, 2.5, 0, Math.PI * 2);
     ctx.fill();
+
+    // Flash white right before explosion
+    if (this.timer < 0.5 && Math.sin(this.pulseTimer * 50) > 0.5) {
+      ctx.fillStyle = '#ffffff';
+      ctx.globalAlpha = 0.7;
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
 
     // Fuse (thicker and more visible)
     ctx.strokeStyle = '#654321';
@@ -254,5 +279,24 @@ export class Bomb extends Entity {
       targetGridX,
       targetGridY
     });
+  }
+
+  // Color manipulation helpers for gradient effects
+  private lightenColor(color: string, percent: number): string {
+    const num = parseInt(color.replace('#', ''), 16);
+    const amt = Math.round(2.55 * percent);
+    const R = Math.min(255, (num >> 16) + amt);
+    const G = Math.min(255, ((num >> 8) & 0x00FF) + amt);
+    const B = Math.min(255, (num & 0x0000FF) + amt);
+    return `#${(1 << 24 | R << 16 | G << 8 | B).toString(16).slice(1)}`;
+  }
+
+  private darkenColor(color: string, percent: number): string {
+    const num = parseInt(color.replace('#', ''), 16);
+    const amt = Math.round(2.55 * percent);
+    const R = Math.max(0, (num >> 16) - amt);
+    const G = Math.max(0, ((num >> 8) & 0x00FF) - amt);
+    const B = Math.max(0, (num & 0x0000FF) - amt);
+    return `#${(1 << 24 | R << 16 | G << 8 | B).toString(16).slice(1)}`;
   }
 }

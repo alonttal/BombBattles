@@ -51,47 +51,78 @@ export class Block extends Entity {
 
     } else {
       // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.2)';
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
       ctx.fillRect(x + 4, y + height + 4, TILE_SIZE - 4, TILE_SIZE - height);
 
-      // Front Face (Darker)
-      ctx.fillStyle = this.getDarkerColor(this.isDestructible ? COLORS.softBlock : COLORS.wall);
+      // Front Face (Darker) with gradient
+      const frontGradient = ctx.createLinearGradient(x, y + height, x, y + TILE_SIZE);
+      const baseColor = this.isDestructible ? COLORS.softBlock : COLORS.wall;
+      frontGradient.addColorStop(0, this.getDarkerColor(baseColor));
+      frontGradient.addColorStop(1, this.getDarkerColor(this.getDarkerColor(baseColor)));
+      ctx.fillStyle = frontGradient;
       ctx.fillRect(x, y + height, TILE_SIZE, TILE_SIZE - height);
 
-      // Top Face (Base Color)
-      ctx.fillStyle = this.isDestructible ? COLORS.softBlock : COLORS.wall;
+      // Top Face with subtle gradient (lighter at top-left)
+      const topGradient = ctx.createLinearGradient(x, y, x + TILE_SIZE, y + TILE_SIZE - height);
+      topGradient.addColorStop(0, this.getLighterColor(baseColor));
+      topGradient.addColorStop(0.5, baseColor);
+      topGradient.addColorStop(1, this.getDarkerColor(baseColor));
+      ctx.fillStyle = topGradient;
       ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE - height);
 
-      // Top Highlight (Bevel)
-      ctx.fillStyle = 'rgba(255,255,255,0.2)';
-      ctx.fillRect(x, y, TILE_SIZE, 4);
-      ctx.fillRect(x, y, 4, TILE_SIZE - height);
+      // Top Highlight (Bevel) - brighter
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.fillRect(x, y, TILE_SIZE, 3);
+      ctx.fillRect(x, y, 3, TILE_SIZE - height);
+
+      // Bottom/Right shadow edge
+      ctx.fillStyle = 'rgba(0,0,0,0.15)';
+      ctx.fillRect(x + TILE_SIZE - 2, y, 2, TILE_SIZE - height);
+      ctx.fillRect(x, y + TILE_SIZE - height - 2, TILE_SIZE, 2);
 
       // Details
       if (this.isDestructible) {
-        // Crate pattern (X box or planks)
-        ctx.fillStyle = 'rgba(0,0,0,0.1)';
-        // Plank lines
-        ctx.fillRect(x, y + (TILE_SIZE - height) / 3, TILE_SIZE, 2);
-        ctx.fillRect(x, y + (TILE_SIZE - height) * 2 / 3, TILE_SIZE, 2);
-        // Nails
-        ctx.fillStyle = 'rgba(0,0,0,0.3)';
-        ctx.fillRect(x + 4, y + 4, 2, 2);
-        ctx.fillRect(x + TILE_SIZE - 6, y + 4, 2, 2);
-        ctx.fillRect(x + 4, y + TILE_SIZE - height - 6, 2, 2);
-        ctx.fillRect(x + TILE_SIZE - 6, y + TILE_SIZE - height - 6, 2, 2);
-      } else {
-        // Wall rivets/metal plates
-        ctx.fillStyle = 'rgba(0,0,0,0.15)';
-        ctx.fillRect(x + 6, y + 6, TILE_SIZE - 12, TILE_SIZE - height - 12); // Inner plate
+        // Wood grain horizontal lines
+        ctx.strokeStyle = 'rgba(139, 90, 43, 0.4)';
+        ctx.lineWidth = 1;
+        for (let i = 1; i < 4; i++) {
+          const lineY = y + (TILE_SIZE - height) * i / 4;
+          ctx.beginPath();
+          ctx.moveTo(x + 2, lineY);
+          ctx.lineTo(x + TILE_SIZE - 2, lineY);
+          ctx.stroke();
+        }
 
-        ctx.fillStyle = '#2c3e50'; // Dark rivet
+        // Darker plank separators
+        ctx.fillStyle = 'rgba(0,0,0,0.2)';
+        ctx.fillRect(x, y + (TILE_SIZE - height) / 2 - 1, TILE_SIZE, 2);
+
+        // Corner bolts (metallic look)
+        this.drawBolt(ctx, x + 5, y + 5);
+        this.drawBolt(ctx, x + TILE_SIZE - 7, y + 5);
+        this.drawBolt(ctx, x + 5, y + TILE_SIZE - height - 7);
+        this.drawBolt(ctx, x + TILE_SIZE - 7, y + TILE_SIZE - height - 7);
+
+      } else {
+        // Wall - metal plate look
+        ctx.fillStyle = 'rgba(0,0,0,0.1)';
+        ctx.fillRect(x + 8, y + 8, TILE_SIZE - 16, TILE_SIZE - height - 16);
+
+        // Cross pattern for wall
+        ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+        ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(x + 6, y + 6, 2, 0, Math.PI * 2);
-        ctx.arc(x + TILE_SIZE - 6, y + 6, 2, 0, Math.PI * 2);
-        ctx.arc(x + 6, y + TILE_SIZE - height - 6, 2, 0, Math.PI * 2);
-        ctx.arc(x + TILE_SIZE - 6, y + TILE_SIZE - height - 6, 2, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(x + 4, y + 4);
+        ctx.lineTo(x + TILE_SIZE - 4, y + TILE_SIZE - height - 4);
+        ctx.moveTo(x + TILE_SIZE - 4, y + 4);
+        ctx.lineTo(x + 4, y + TILE_SIZE - height - 4);
+        ctx.stroke();
+
+        // Corner rivets (darker, metallic)
+        this.drawBolt(ctx, x + 5, y + 5);
+        this.drawBolt(ctx, x + TILE_SIZE - 7, y + 5);
+        this.drawBolt(ctx, x + 5, y + TILE_SIZE - height - 7);
+        this.drawBolt(ctx, x + TILE_SIZE - 7, y + TILE_SIZE - height - 7);
       }
     }
   }
@@ -116,5 +147,37 @@ export class Block extends Entity {
       gridX: this.position.gridX,
       gridY: this.position.gridY
     });
+  }
+
+  private getLighterColor(hex: string): string {
+    let r = parseInt(hex.substring(1, 3), 16);
+    let g = parseInt(hex.substring(3, 5), 16);
+    let b = parseInt(hex.substring(5, 7), 16);
+
+    r = Math.min(255, Math.floor(r * 1.2));
+    g = Math.min(255, Math.floor(g * 1.2));
+    b = Math.min(255, Math.floor(b * 1.2));
+
+    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+  }
+
+  private drawBolt(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+    // Metallic bolt with shine
+    ctx.fillStyle = '#4a4a4a';
+    ctx.beginPath();
+    ctx.arc(x + 2, y + 2, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Bolt highlight
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.beginPath();
+    ctx.arc(x + 1, y + 1, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Bolt shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.beginPath();
+    ctx.arc(x + 3, y + 3, 1, 0, Math.PI * 2);
+    ctx.fill();
   }
 }

@@ -14,11 +14,14 @@ interface ActiveShake {
 }
 
 export class Camera {
+  private zoom: number = 1;
+  private targetZoom: number = 1;
+  private zoomSpeed: number = 2; // Units per second
+
   private shakes: ActiveShake[] = [];
   private offsetX: number = 0;
   private offsetY: number = 0;
 
-  // Preset shake configurations
   static readonly PRESETS = {
     bombExplode: {
       intensity: 8,
@@ -52,6 +55,15 @@ export class Camera {
     }
   };
 
+  zoomTo(scale: number, duration: number = 0.5): void {
+    this.targetZoom = scale;
+    if (duration > 0) {
+      this.zoomSpeed = Math.abs(this.targetZoom - this.zoom) / duration;
+    } else {
+      this.zoom = this.targetZoom;
+    }
+  }
+
   shake(config: ShakeConfig): void {
     this.shakes.push({
       intensity: config.intensity,
@@ -67,6 +79,17 @@ export class Camera {
   }
 
   update(deltaTime: number): void {
+    // Update zoom
+    if (this.zoom !== this.targetZoom) {
+      if (this.zoom < this.targetZoom) {
+        this.zoom = Math.min(this.targetZoom, this.zoom + this.zoomSpeed * deltaTime);
+      } else {
+        this.zoom = Math.max(this.targetZoom, this.zoom - this.zoomSpeed * deltaTime);
+      }
+      // Safety clamp
+      this.zoom = Math.max(0.5, Math.min(3.0, this.zoom));
+    }
+
     this.offsetX = 0;
     this.offsetY = 0;
 
@@ -90,8 +113,6 @@ export class Camera {
 
       // Calculate shake offset using sine waves at the specified frequency
       const time = shake.elapsed * shake.frequency * Math.PI * 2;
-
-      // Use different frequencies for X and Y to create more chaotic movement
       const shakeX = Math.sin(time) * currentIntensity;
       const shakeY = Math.sin(time * 1.3 + 0.5) * currentIntensity;
 
@@ -101,16 +122,32 @@ export class Camera {
       this.offsetY += shakeY + (Math.random() - 0.5) * jitter;
     }
 
-    // Clamp offsets to prevent extreme values when multiple shakes combine
+    // Clamp offsets
     const maxOffset = 20;
     this.offsetX = Math.max(-maxOffset, Math.min(maxOffset, this.offsetX));
     this.offsetY = Math.max(-maxOffset, Math.min(maxOffset, this.offsetY));
   }
 
   applyTransform(ctx: CanvasRenderingContext2D): void {
+    // Basic transform (zoom top-left relative to center if handled externally, or just scale)
+    // Deprecated in favor of applyCenteredTransform for main view
+    ctx.scale(this.zoom, this.zoom);
     if (this.offsetX !== 0 || this.offsetY !== 0) {
       ctx.translate(Math.round(this.offsetX), Math.round(this.offsetY));
     }
+  }
+
+  applyCenteredTransform(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    // Translate to center
+    ctx.translate(width / 2, height / 2);
+    // Scale
+    ctx.scale(this.zoom, this.zoom);
+    // Shake
+    if (this.offsetX !== 0 || this.offsetY !== 0) {
+      ctx.translate(this.offsetX, this.offsetY);
+    }
+    // Translate back
+    ctx.translate(-width / 2, -height / 2);
   }
 
   getOffset(): { x: number; y: number } {

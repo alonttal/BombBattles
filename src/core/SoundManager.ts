@@ -11,7 +11,9 @@ type SoundType =
   | 'countdown'
   | 'gameStart'
   | 'gameOver'
-  | 'menuSelect';
+  | 'menuSelect'
+  | 'shieldBreak'
+  | 'teleport';
 
 class SoundManagerClass {
   private audioContext: AudioContext | null = null;
@@ -83,6 +85,12 @@ class SoundManagerClass {
           break;
         case 'menuSelect':
           this.playMenuSelect(ctx);
+          break;
+        case 'shieldBreak':
+          this.playShieldBreak(ctx);
+          break;
+        case 'teleport':
+          this.playTeleport(ctx);
           break;
       }
     } catch (e) {
@@ -447,6 +455,51 @@ class SoundManagerClass {
 
     osc.start(now);
     osc.stop(now + 0.1);
+  }
+
+  private playShieldBreak(ctx: AudioContext): void {
+    const now = ctx.currentTime;
+
+    // Glass breaking sound
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(2000, now);
+    osc.frequency.exponentialRampToValueAtTime(100, now + 0.3);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.2 * this.masterVolume, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.value = 1000;
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start(now);
+    osc.stop(now + 0.3);
+  }
+
+  private playTeleport(ctx: AudioContext): void {
+    const now = ctx.currentTime;
+
+    // Sci-fi swoop
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(200, now);
+    osc.frequency.exponentialRampToValueAtTime(2000, now + 0.3);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.2 * this.masterVolume, now);
+    gain.gain.linearRampToValueAtTime(0, now + 0.3);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start(now);
+    osc.stop(now + 0.3);
   }
 
   setVolume(volume: number): void {

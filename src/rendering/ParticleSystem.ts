@@ -161,6 +161,89 @@ export const PARTICLE_PRESETS = {
     gravity: 0,
     friction: 0.95,
     shape: 'circle' as const
+  },
+
+  teleportOut: {
+    count: 20,
+    spread: 10,
+    speed: { min: 20, max: 50 },
+    angle: { min: 0, max: Math.PI * 2 }, // Inward? Use negative speed? Particle system uses speed as magnitude.
+    // To do inward spiral we need update logic or negative velocity?
+    // Let's just do explosion outwards for now or simple cloud
+    lifetime: { min: 0.5, max: 0.8 },
+    size: { min: 2, max: 5 },
+    colors: ['#cc00ff', '#ff00ff', '#ffffff'],
+    gravity: -20,
+    shape: 'square' as const
+  },
+
+  teleportIn: {
+    count: 20,
+    spread: 10,
+    speed: { min: 50, max: 100 },
+    lifetime: { min: 0.4, max: 0.7 },
+    size: { min: 3, max: 6 },
+    colors: ['#00ffff', '#ffffff', '#0088ff'],
+    gravity: -20,
+    shape: 'square' as const
+  },
+
+  punchImpact: {
+    count: 12,
+    spread: 5,
+    speed: { min: 100, max: 200 },
+    lifetime: { min: 0.2, max: 0.4 },
+    size: { min: 3, max: 6 },
+    colors: ['#ffffff', '#ffff00'],
+    gravity: 50,
+    shape: 'spark' as const
+  },
+
+  footstep: {
+    count: 2,
+    spread: 4,
+    speed: { min: 10, max: 30 },
+    angle: { min: -Math.PI, max: 0 }, // Upward
+    lifetime: { min: 0.3, max: 0.6 },
+    size: { min: 2, max: 4 },
+    colors: ['#aaaaaa', '#dddddd'],
+    gravity: -10,
+    friction: 0.9,
+    shape: 'circle' as const
+  },
+
+  shieldBreak: {
+    count: 20,
+    spread: 0,
+    speed: { min: 100, max: 300 },
+    lifetime: { min: 0.4, max: 0.8 },
+    size: { min: 3, max: 8 },
+    colors: ['#00ffff', '#ccffff', '#ffffff'],
+    gravity: 200,
+    friction: 0.95,
+    shape: 'square' as const
+  },
+
+  charge: {
+    count: 1, // Emitted continuously
+    spread: 16,
+    speed: { min: -20, max: -50 }, // Inward
+    lifetime: { min: 0.5, max: 1.0 },
+    size: { min: 2, max: 4 },
+    colors: ['#ffffff', '#ffff00'],
+    gravity: 0,
+    shape: 'square' as const
+  },
+
+  speedTrail: {
+    count: 1,
+    spread: 2,
+    speed: { min: 0, max: 0 },
+    lifetime: { min: 0.1, max: 0.3 },
+    size: { min: 3, max: 5 },
+    colors: ['#ffffff', '#ffff00'], // Override with player color
+    gravity: 0,
+    shape: 'circle' as const
   }
 };
 

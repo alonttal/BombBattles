@@ -52,6 +52,17 @@ export class Player extends Entity {
   private punchAnimationTimer: number = 0;
   private punchAnimationDuration: number = 0.3;
 
+  // Victory animation
+  public isVictory: boolean = false;
+  private victoryTimer: number = 0;
+
+  // Teleport animation
+  public isTeleporting: boolean = false;
+  public teleportPhase: 'out' | 'in' = 'out';
+  public teleportProgress: number = 0;
+  public teleportTarget: { gridX: number, gridY: number } | null = null;
+  private readonly teleportDuration: number = 0.4; // 0.4s out, 0.4s in
+
   // For debuffs
   private debuffs: Map<string, number> = new Map();
 
@@ -85,6 +96,18 @@ export class Player extends Entity {
       if (this.animationTimer >= 0.1) {
         this.animationTimer = 0;
         this.animationFrame = (this.animationFrame + 1) % 4;
+
+        // Emit footstep event on specific frames (e.g., 0 and 2 are contact points?)
+        if (this.animationFrame === 0 || this.animationFrame === 2) {
+          EventBus.emit('player-step', { player: this });
+        }
+      }
+
+      // Check for speed trail
+      if (this.speed > DEFAULT_PLAYER_SPEED) {
+        if (Math.random() < 0.3) {
+          EventBus.emit('player-trail', { player: this });
+        }
       }
 
       // Bounce effect (Squash & Stretch)
@@ -121,11 +144,46 @@ export class Player extends Entity {
         this.punchAnimationTimer = 0;
       }
     }
+
+    // Victory animation
+    if (this.isVictory) {
+      this.victoryTimer += deltaTime * 5;
+    }
+
+    // Teleport animation
+    if (this.isTeleporting) {
+      if (this.teleportPhase === 'out') {
+        this.teleportProgress += deltaTime / this.teleportDuration;
+        if (this.teleportProgress >= 1) {
+          this.teleportPhase = 'in';
+          this.teleportProgress = 0;
+          if (this.teleportTarget) {
+            this.position.gridX = this.teleportTarget.gridX;
+            this.position.gridY = this.teleportTarget.gridY;
+            this.position.pixelX = this.teleportTarget.gridX * TILE_SIZE;
+            this.position.pixelY = this.teleportTarget.gridY * TILE_SIZE;
+            EventBus.emit('teleport-arrived', { player: this });
+          }
+        }
+      } else {
+        this.teleportProgress += deltaTime / this.teleportDuration;
+        if (this.teleportProgress >= 1) {
+          this.isTeleporting = false;
+          this.teleportProgress = 0;
+          this.teleportTarget = null;
+        }
+      }
+    }
   }
 
   startPunchAnimation(): void {
     this.isPunching = true;
     this.punchAnimationTimer = 0;
+  }
+
+  setVictory(): void {
+    this.isVictory = true;
+    this.stopMoving();
   }
 
   render(ctx: CanvasRenderingContext2D, interpolation: number): void {
@@ -135,11 +193,52 @@ export class Player extends Entity {
     const color = PLAYER_COLORS[this.playerIndex];
 
     if (!this.isAlive) {
-      // Death animation
-      const scale = 1 - this.deathAnimationProgress;
-      ctx.globalAlpha = scale;
+      // Death animation: Spin and shrink
+      const progress = this.deathAnimationProgress;
+      const scale = 1 - progress;
+      const rotation = progress * Math.PI * 4; // 2 spins
+
+      ctx.save();
+      ctx.translate(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
+      ctx.rotate(rotation);
+      ctx.scale(scale, scale);
+      ctx.translate(-(x + TILE_SIZE / 2), -(y + TILE_SIZE / 2));
+
+      ctx.globalAlpha = Math.max(0, 1 - progress);
       this.drawPlayer(ctx, x, y, color);
       ctx.globalAlpha = 1;
+
+      ctx.restore();
+      return;
+    }
+
+    // Teleport effect
+    if (this.isTeleporting) {
+      const progress = this.teleportProgress;
+      let scale = 1;
+      let rotation = 0;
+      let alpha = 1;
+
+      if (this.teleportPhase === 'out') {
+        scale = 1 - progress;
+        rotation = progress * Math.PI * 4; // 720 degrees
+        alpha = 1 - progress;
+      } else {
+        scale = progress;
+        rotation = (1 - progress) * Math.PI * -4;
+        alpha = progress;
+      }
+
+      ctx.save();
+      ctx.translate(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
+      ctx.rotate(rotation);
+      ctx.scale(scale, scale);
+      ctx.translate(-(x + TILE_SIZE / 2), -(y + TILE_SIZE / 2));
+
+      ctx.globalAlpha = alpha;
+      this.drawPlayer(ctx, x, y, color);
+      ctx.globalAlpha = 1;
+      ctx.restore();
       return;
     }
 
@@ -165,98 +264,192 @@ export class Player extends Entity {
 
   private drawPlayer(ctx: CanvasRenderingContext2D, x: number, y: number, color: string): void {
     const bobOffset = this.isMoving ? Math.sin(this.animationFrame * Math.PI / 2) * 2 : 0;
+    const victoryOffset = this.isVictory ? Math.sin(this.victoryTimer) * 5 - 5 : 0;
 
     const cx = x + TILE_SIZE / 2;
-    const cy = y + TILE_SIZE / 2 + bobOffset;
+    const cy = y + TILE_SIZE / 2 + bobOffset + victoryOffset;
 
     ctx.save();
     ctx.translate(cx, cy);
     ctx.scale(this.squashX, this.squashY);
 
-    // Hands & Feet (drawn relative to center)
-    let handOffset = this.isMoving ? Math.sin(this.animationFrame * Math.PI) * 6 : 0;
-    const footOffset = this.isMoving ? Math.cos(this.animationFrame * Math.PI) * 6 : 0;
+    // Helpers
+    const drawHand = (xOffset: number, yOffset: number, isRightHand: boolean) => {
+      ctx.fillStyle = color;
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
 
-    // Punch animation - extend arm forward
-    let punchExtend = 0;
-    if (this.isPunching) {
-      const punchProgress = this.punchAnimationTimer / this.punchAnimationDuration;
-      // Punch out and back
-      punchExtend = Math.sin(punchProgress * Math.PI) * 12;
+      let bx = xOffset;
+      let by = yOffset;
+
+      // Punch logic
+      if (this.isPunching) {
+        let isPunchingHand = false;
+        if (this.direction === Direction.RIGHT && isRightHand) isPunchingHand = true;
+        if (this.direction === Direction.LEFT && !isRightHand) isPunchingHand = true;
+        if (this.direction === Direction.DOWN && isRightHand) isPunchingHand = true;
+        if (this.direction === Direction.UP && !isRightHand) isPunchingHand = true;
+
+        if (isPunchingHand) {
+          const punchProgress = this.punchAnimationTimer / this.punchAnimationDuration;
+          const punchExtend = Math.sin(punchProgress * Math.PI) * 12;
+
+          switch (this.direction) {
+            case Direction.RIGHT: bx += punchExtend; break;
+            case Direction.LEFT: bx -= punchExtend; break;
+            case Direction.UP: by -= punchExtend; break;
+            case Direction.DOWN: by += punchExtend; break;
+          }
+        }
+      }
+
+      ctx.arc(bx, by, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    };
+
+    const drawBody = () => {
+      // Outer glow
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 15;
+
+      // Main body with gradient shading
+      const bodyGradient = ctx.createRadialGradient(-4, -10, 2, 0, 0, 20);
+      bodyGradient.addColorStop(0, this.lightenColor(color, 30)); // Highlight
+      bodyGradient.addColorStop(0.5, color); // Mid
+      bodyGradient.addColorStop(1, this.darkenColor(color, 20)); // Shadow
+
+      ctx.fillStyle = bodyGradient;
+      ctx.beginPath();
+      ctx.arc(0, -4, 16, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Bold outline
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      // Rim light (edge highlight)
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, -4, 14, -Math.PI * 0.7, -Math.PI * 0.2);
+      ctx.stroke();
+
+      // Top shine
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+      ctx.beginPath();
+      ctx.ellipse(-4, -12, 6, 4, -0.3, 0, Math.PI * 2);
+      ctx.fill();
+    };
+
+    const drawFeet = () => {
+      const footOffset = this.isMoving ? Math.cos(this.animationFrame * Math.PI) * 6 : 0;
+      ctx.fillStyle = color;
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 2;
+
+      // Left Foot
+      ctx.beginPath();
+      ctx.ellipse(-8, 12 + footOffset, 5, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // Right Foot
+      ctx.beginPath();
+      ctx.ellipse(8, 12 - footOffset, 5, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    };
+
+    // --- Z-Sorting Logic ---
+
+    // Base hand offsets (vertical oscillation)
+    // handOffset was `sin(frame) * 6`
+    // Left uses +offset, Right uses -offset (or vice versa) in previous logic.
+    // Let's use that for standard vertical swing.
+    const swingAmount = this.isMoving ? Math.sin(this.animationFrame * Math.PI) * 6 : 0;
+    let leftHandY = swingAmount;
+    let rightHandY = -swingAmount;
+
+    if (this.isVictory) {
+      leftHandY = -8;
+      rightHandY = -8;
     }
 
-    ctx.fillStyle = color;
+    // Determine Z-Depth
+    // Higher Z = Drawn Later (On Top). Body is Z=0.
 
-    // Left Foot - with outline
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.ellipse(-8, 12 + footOffset, 5, 4, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    // Right Foot - with outline
-    ctx.beginPath();
-    ctx.ellipse(8, 12 - footOffset, 5, 4, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
+    let leftHandZ = 0;
+    let rightHandZ = 0;
+    const bodyZ = 0;
 
-    // Hands
-    // Back hand - with outline
-    ctx.beginPath();
-    ctx.arc(this.direction === Direction.RIGHT ? -14 : 14, 0 - handOffset, 5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
+    if (this.direction === Direction.UP) {
+      // Walking Away: Generally back, but if we want "interchanging",
+      // we can let the "forward-swinging" arm come in front?
+      // No, for walking away, arms in front of body looks weird. Keep them back.
+      leftHandZ = -1;
+      rightHandZ = -1;
+    } else if (this.direction === Direction.DOWN) {
+      // Walking Towards: Generally front.
+      leftHandZ = 1;
+      rightHandZ = 1;
+    } else {
+      // Side view (Left/Right)
+      // This is where we interchange depth!
 
-    // Body - with glow and outline
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 15;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(0, -4, 16, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
+      // Determine which arm is swinging "Forward" (into the screen / front of body)
+      // Usually "Front" arm (closest to camera) is Z=1. "Back" arm is Z=-1.
+      // But user wants them to switch.
 
-    // Body outline
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
+      const swingPhase = Math.sin(this.animationFrame * Math.PI);
 
-    // Body highlight (to make it look shiny)
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-    ctx.beginPath();
-    ctx.arc(-4, -8, 6, 0, Math.PI * 2);
-    ctx.fill();
+      if (this.direction === Direction.RIGHT) {
+        // Facing Right.
+        // Right Arm is "Front" (14px). Left Arm is "Back" (-14px).
+        // Standard: Right=1, Left=-1.
+        // Interchange: If swing > 0, Right=1. If swing < 0, Right=-1.
+        //              If swing < 0, Left=1.  If swing > 0, Left=-1.
 
-    // Front hand - with outline (includes punch extension)
-    ctx.fillStyle = color;
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
+        rightHandZ = swingPhase > 0 ? 1 : -1;
+        leftHandZ = swingPhase < 0 ? 1 : -1;
 
-    let frontHandX = this.direction === Direction.RIGHT ? 14 : -14;
-    let frontHandY = 0 + handOffset;
+      } else { // LEFT
+        // Facing Left.
+        // Left Arm is "Front" (-14px). Right Arm is "Back" (14px).
 
-    // Apply punch extension
-    if (this.isPunching) {
-      switch (this.direction) {
-        case Direction.RIGHT:
-          frontHandX += punchExtend;
-          break;
-        case Direction.LEFT:
-          frontHandX -= punchExtend;
-          break;
-        case Direction.UP:
-          frontHandY -= punchExtend;
-          break;
-        case Direction.DOWN:
-          frontHandY += punchExtend;
-          break;
+        leftHandZ = swingPhase > 0 ? 1 : -1;
+        rightHandZ = swingPhase < 0 ? 1 : -1;
       }
     }
 
-    ctx.arc(frontHandX, frontHandY, 5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
+    if (!this.isMoving) {
+      // Reset to standard idle layering
+      if (this.direction === Direction.UP) { leftHandZ = -1; rightHandZ = -1; }
+      else if (this.direction === Direction.DOWN) { leftHandZ = 1; rightHandZ = 1; }
+      else if (this.direction === Direction.RIGHT) { leftHandZ = -1; rightHandZ = 1; }
+      else { leftHandZ = 1; rightHandZ = -1; }
+
+      leftHandY = 0;
+      rightHandY = 0;
+    }
+
+    // Sort and Draw
+    drawFeet(); // Feet always bottom-most layer?
+
+    const entities = [
+      { id: 'body', z: bodyZ, draw: drawBody },
+      // X offsets: If Facing Right, Right Hand is at +14, Left at -14.
+      // If Facing Left, Left Hand is at -14, Right at +14.
+      // So offsets are constant regardless of facing? Yes, -14 is always Left, +14 is Right relative to sprite center.
+      { id: 'left', z: leftHandZ, draw: () => drawHand(-14, leftHandY, false) },
+      { id: 'right', z: rightHandZ, draw: () => drawHand(14, rightHandY, true) }
+    ];
+
+    entities.sort((a, b) => a.z - b.z);
+    entities.forEach(e => e.draw());
 
     // Face
     ctx.fillStyle = '#ffffff';
@@ -264,31 +457,11 @@ export class Player extends Entity {
     const eyeOffsetY = this.direction === Direction.UP ? -3 : this.direction === Direction.DOWN ? 2 : 0;
 
     if (this.direction !== Direction.UP) {
-      // Left Eye
       this.drawEye(ctx, -5 + eyeOffsetX, -6 + eyeOffsetY);
-      // Right Eye
       this.drawEye(ctx, 5 + eyeOffsetX, -6 + eyeOffsetY);
     }
 
-    // Player number badge with background
-    const badgeY = -24;
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
-    ctx.shadowBlur = 4;
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.arc(0, badgeY, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
 
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    ctx.fillStyle = color;
-    ctx.font = 'bold 10px Arial';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(`${this.playerIndex + 1}`, 0, badgeY);
 
     ctx.restore();
   }
@@ -312,25 +485,29 @@ export class Player extends Entity {
       ctx.lineWidth = 1.5;
       ctx.stroke();
 
-      // Pupil
+      // Pupil - shifts based on direction for eye tracking effect
+      let pupilOffsetX = 0;
+      let pupilOffsetY = 0;
+
+      if (this.isMoving) {
+        switch (this.direction) {
+          case Direction.LEFT: pupilOffsetX = -1.5; break;
+          case Direction.RIGHT: pupilOffsetX = 1.5; break;
+          case Direction.UP: pupilOffsetY = -1; break;
+          case Direction.DOWN: pupilOffsetY = 1; break;
+        }
+      }
+
       ctx.fillStyle = '#000000';
       ctx.beginPath();
-      ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+      ctx.arc(x + pupilOffsetX, y + pupilOffsetY, 2.5, 0, Math.PI * 2);
       ctx.fill();
 
-      // Eye shine (makes it look alive!)
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+      // Eye shine (makes it look alive!) - also shifts with pupil
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
       ctx.beginPath();
-      ctx.arc(x - 1, y - 1, 1.5, 0, Math.PI * 2);
+      ctx.arc(x + pupilOffsetX - 0.5, y + pupilOffsetY - 1, 1.2, 0, Math.PI * 2);
       ctx.fill();
-
-      // Eyebrow for expression
-      ctx.beginPath();
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 1.5;
-      ctx.moveTo(x - 4, y - 6);
-      ctx.lineTo(x + 3, y - 4);
-      ctx.stroke();
     }
   }
 
@@ -428,6 +605,9 @@ export class Player extends Entity {
 
   addAbility(ability: string): void {
     this.abilities.add(ability);
+    if (ability === 'teleport' && this.teleportCharges < 3) {
+      this.teleportCharges = 3; // Give initial charges
+    }
   }
 
   hasAbility(ability: string): boolean {
@@ -448,5 +628,39 @@ export class Player extends Entity {
 
   getDirection(): Direction {
     return this.direction;
+  }
+
+  useTeleport(targetGridX: number, targetGridY: number): void {
+    if (this.teleportCharges > 0 && !this.isTeleporting) {
+      this.isTeleporting = true;
+      this.teleportPhase = 'out';
+      this.teleportProgress = 0;
+      this.teleportTarget = { gridX: targetGridX, gridY: targetGridY };
+      this.teleportCharges--;
+      EventBus.emit('teleport-start', { player: this });
+    }
+  }
+
+  canTeleport(): boolean {
+    return this.hasAbility('teleport') && this.teleportCharges > 0 && !this.isTeleporting;
+  }
+
+  // Color manipulation helpers
+  private lightenColor(color: string, percent: number): string {
+    const num = parseInt(color.replace('#', ''), 16);
+    const amt = Math.round(2.55 * percent);
+    const R = Math.min(255, (num >> 16) + amt);
+    const G = Math.min(255, ((num >> 8) & 0x00FF) + amt);
+    const B = Math.min(255, (num & 0x0000FF) + amt);
+    return `#${(1 << 24 | R << 16 | G << 8 | B).toString(16).slice(1)}`;
+  }
+
+  private darkenColor(color: string, percent: number): string {
+    const num = parseInt(color.replace('#', ''), 16);
+    const amt = Math.round(2.55 * percent);
+    const R = Math.max(0, (num >> 16) - amt);
+    const G = Math.max(0, ((num >> 8) & 0x00FF) - amt);
+    const B = Math.max(0, (num & 0x0000FF) - amt);
+    return `#${(1 << 24 | R << 16 | G << 8 | B).toString(16).slice(1)}`;
   }
 }
