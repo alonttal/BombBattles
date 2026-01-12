@@ -3,79 +3,74 @@ import { Block } from '../entities/Block';
 import { Bomb } from '../entities/Bomb';
 import { PowerUp } from '../entities/PowerUp';
 import { Explosion } from '../entities/Explosion';
-import { Direction, GRID_WIDTH, GRID_HEIGHT } from '../constants';
-import { Pathfinder } from './Pathfinder';
+import { Direction, GRID_WIDTH, GRID_HEIGHT, BOMB_FUSE_TIME } from '../constants';
 
-interface GridCell {
+interface DangerCell {
   x: number;
   y: number;
   isWalkable: boolean;
-  isDangerous: boolean;
-  dangerTime: number; // Time until explosion reaches this cell
-  hasPowerUp: boolean;
-  hasPlayer: boolean;
+  dangerTime: number;
   hasBomb: boolean;
+  hasPowerUp: boolean;
+  hasDestructibleBlock: boolean;
 }
 
-interface AIState {
-  currentGoal: 'flee' | 'attack' | 'collect' | 'wander';
-  targetX: number;
-  targetY: number;
-  lastBombTime: number;
-  stuckTimer: number;
-  lastPosition: { x: number; y: number };
-  currentPath: { x: number; y: number }[];
+// Clear state machine
+type AIState =
+  | 'FINDING_BOMB_SPOT'    // Step 1: Find where to place bomb
+  | 'MOVING_TO_BOMB_SPOT'  // Step 2: Move to bomb placement location
+  | 'ESCAPING'             // Step 3-4: Run to safety after placing bomb
+  | 'COLLECTING';          // Bonus: Pick up power-ups when safe
+
+interface BombPlan {
+  bombX: number;
+  bombY: number;
+  escapeX: number;
+  escapeY: number;
 }
+
+interface DifficultySettings {
+  reactionTime: number;
+  aggressiveness: number; // 0-1, how much to prioritize chasing players vs breaking blocks
+  minBombCooldown: number;
+}
+
+const DIFFICULTY_PRESETS: Record<string, DifficultySettings> = {
+  easy: {
+    reactionTime: 0.3,
+    aggressiveness: 0.2,
+    minBombCooldown: 2.5,
+  },
+  medium: {
+    reactionTime: 0.15,
+    aggressiveness: 0.5,
+    minBombCooldown: 1.5,
+  },
+  hard: {
+    reactionTime: 0.08,
+    aggressiveness: 0.8,
+    minBombCooldown: 0.8,
+  }
+};
 
 export class AIController {
   private player: Player;
-  private state: AIState;
   private difficulty: 'easy' | 'medium' | 'hard';
-  private thinkInterval: number;
-  private lastThinkTime: number = 0;
+  private settings: DifficultySettings;
 
-  // Difficulty settings
-  private readonly DIFFICULTY_SETTINGS = {
-    easy: {
-      reactionTime: 500,    // ms between decisions
-      bombChance: 0.4,      // chance to place bomb when appropriate
-      avoidanceSkill: 0.95, // how well they avoid danger
-      chaseSkill: 0.3,      // how well they chase players
-      minBombDelay: 2000,   // minimum time between bombs
-    },
-    medium: {
-      reactionTime: 300,
-      bombChance: 0.55,
-      avoidanceSkill: 0.98,
-      chaseSkill: 0.5,
-      minBombDelay: 1500,
-    },
-    hard: {
-      reactionTime: 150,
-      bombChance: 0.7,
-      avoidanceSkill: 1.0,
-      chaseSkill: 0.7,
-      minBombDelay: 1200,
-    }
-  };
+  private state: AIState = 'FINDING_BOMB_SPOT';
+  private currentPlan: BombPlan | null = null;
+  private lastDecisionTime: number = 0;
+  private lastBombTime: number = -10;
 
   constructor(player: Player, difficulty: 'easy' | 'medium' | 'hard' = 'medium') {
     this.player = player;
     this.difficulty = difficulty;
-    this.thinkInterval = this.DIFFICULTY_SETTINGS[difficulty].reactionTime;
-    this.state = {
-      currentGoal: 'wander',
-      targetX: player.position.gridX,
-      targetY: player.position.gridY,
-      lastBombTime: 0,
-      stuckTimer: 0,
-      lastPosition: { x: player.position.gridX, y: player.position.gridY },
-      currentPath: []
-    };
+    this.settings = DIFFICULTY_PRESETS[difficulty];
   }
 
   update(
-    deltaTime: number,
+    _deltaTime: number,
     currentTime: number,
     blocks: Block[],
     bombs: Bomb[],
@@ -83,172 +78,608 @@ export class AIController {
     powerUps: PowerUp[],
     players: Player[]
   ): { direction: Direction | null; placeBomb: boolean } {
-    // Build grid understanding - we need this every frame for safety checks
-    const grid = this.buildGrid(blocks, bombs, explosions, powerUps, players);
+    const grid = this.buildDangerGrid(blocks, bombs, explosions, powerUps);
+    const myX = this.player.position.gridX;
+    const myY = this.player.position.gridY;
+    const myCell = grid[myY]?.[myX];
 
-    // Only think at intervals based on difficulty, but always check safety
-    const shouldThink = currentTime - this.lastThinkTime >= this.thinkInterval;
-    if (!shouldThink) {
-      // Between thinking intervals, stick to the current path if it's still valid
-      if (this.state.currentPath && this.state.currentPath.length > 0) {
-        const nextNode = this.state.currentPath[0];
-        // Check if we reached the next node
-        if (this.player.position.gridX === nextNode.x && this.player.position.gridY === nextNode.y) {
-          this.state.currentPath.shift(); // Remove reached node
-        }
+    // ALWAYS check if we're in danger - override everything else
+    const isInDanger = myCell && myCell.dangerTime < Infinity;
 
-        if (this.state.currentPath.length > 0) {
-          const nextTarget = this.state.currentPath[0];
-          const direction = this.getDirectionToNode(nextTarget);
-          return { direction, placeBomb: false };
-        }
-      }
-      return { direction: null, placeBomb: false };
-    }
-    this.lastThinkTime = currentTime;
-
-    // Check if stuck
-    this.checkIfStuck(deltaTime);
-
-    // Decide goal priority
-    const danger = this.assessDanger(grid);
-    const settings = this.DIFFICULTY_SETTINGS[this.difficulty];
-
-    let placeBomb = false;
-    let targetX = this.player.position.gridX;
-    let targetY = this.player.position.gridY;
-
-    if (danger.isInDanger) {
-      // Priority 1: Flee from danger - ALWAYS TOP PRIORITY
-      this.state.currentGoal = 'flee';
-      const safeSpot = this.findSafeSpot(grid);
-      if (safeSpot) {
-        targetX = safeSpot.x;
-        targetY = safeSpot.y;
-      }
-      // NEVER place bombs while fleeing
-      placeBomb = false;
-    } else {
-      // Not in immediate danger, consider other goals
-      const nearbyPowerUp = this.findNearbyPowerUp(grid, powerUps);
-      const nearbyEnemy = this.findNearbyEnemy(players);
-
-      if (nearbyPowerUp && Math.random() < 0.7) {
-        // Priority 2: Collect power-ups (but be safe)
-        this.state.currentGoal = 'collect';
-        targetX = nearbyPowerUp.x;
-        targetY = nearbyPowerUp.y;
-      } else if (nearbyEnemy && Math.random() < settings.chaseSkill) {
-        // Priority 3: Attack enemies
-        this.state.currentGoal = 'attack';
-        targetX = nearbyEnemy.position.gridX;
-        targetY = nearbyEnemy.position.gridY;
-
-        // Consider placing bomb if close to enemy
-        const distToEnemy = Math.abs(this.player.position.gridX - nearbyEnemy.position.gridX) +
-          Math.abs(this.player.position.gridY - nearbyEnemy.position.gridY);
-
-        const timeSinceLastBomb = currentTime - this.state.lastBombTime;
-
-        if (distToEnemy >= 1 &&
-          distToEnemy <= this.player.bombRange + 2 &&
-          this.canPlaceBombSafely(grid) &&
-          Math.random() < settings.bombChance &&
-          timeSinceLastBomb > settings.minBombDelay) {
-          placeBomb = true;
-          this.state.lastBombTime = currentTime;
-        }
-      } else {
-        // Priority 4: Wander and break blocks
-        this.state.currentGoal = 'wander';
-
-        // Pick new wander target if current one is reached or invalid
-        if (this.isAtTarget() || this.state.stuckTimer > 1 || !this.isValidTarget(this.state.targetX, this.state.targetY, grid)) {
-          const wanderTarget = this.findWanderTarget(grid);
-          if (wanderTarget) {
-            targetX = wanderTarget.x;
-            targetY = wanderTarget.y;
-          }
-        } else {
-          targetX = this.state.targetX;
-          targetY = this.state.targetY;
-        }
-
-        // Consider breaking blocks while wandering
-        const timeSinceLastBomb = currentTime - this.state.lastBombTime;
-
-        if (this.isNearDestructibleBlock(grid) &&
-          this.canPlaceBombSafely(grid) &&
-          Math.random() < settings.bombChance * 0.7 &&
-          timeSinceLastBomb > settings.minBombDelay) {
-          placeBomb = true;
-          this.state.lastBombTime = currentTime;
-        }
-      }
+    if (isInDanger) {
+      // Emergency escape - find safest direction immediately
+      this.state = 'ESCAPING';
+      const escapeDir = this.findBestEscapeDirection(grid, myX, myY);
+      return { direction: escapeDir, placeBomb: false };
     }
 
-    // Update state target
-    this.state.targetX = targetX;
-    this.state.targetY = targetY;
-
-    // Calculate path to target using A*
-    let path = Pathfinder.findPath(
-      this.player.position.gridX,
-      this.player.position.gridY,
-      targetX,
-      targetY,
-      grid
-    );
-
-    // Fallback: If pathfinding failed (target unreachable) and we were trying to attack/collect,
-    // switch to wander mode to break walls or find a better spot.
-    if (!path && (this.state.currentGoal === 'attack' || this.state.currentGoal === 'collect')) {
-      this.state.currentGoal = 'wander';
-      const wanderTarget = this.findWanderTarget(grid);
-      if (wanderTarget) {
-        targetX = wanderTarget.x;
-        targetY = wanderTarget.y;
-        this.state.targetX = targetX;
-        this.state.targetY = targetY;
-
-        path = Pathfinder.findPath(
-          this.player.position.gridX,
-          this.player.position.gridY,
-          targetX,
-          targetY,
-          grid
-        );
-      }
+    // If we were escaping and are now safe, go back to finding next bomb spot
+    if (this.state === 'ESCAPING') {
+      this.state = 'FINDING_BOMB_SPOT';
+      this.currentPlan = null;
     }
 
-    this.state.currentPath = path || [];
+    // Rate limit decisions (except when escaping)
+    const shouldThink = currentTime - this.lastDecisionTime >= this.settings.reactionTime;
+    if (!shouldThink && this.state !== 'FINDING_BOMB_SPOT') {
+      return this.continueCurrentAction(grid, myX, myY);
+    }
+    this.lastDecisionTime = currentTime;
 
-    let direction: Direction | null = null;
+    // Check for nearby power-ups first (quick detour)
+    const nearbyPowerUp = this.findNearbyPowerUp(grid, powerUps, myX, myY);
+    if (nearbyPowerUp && this.state === 'FINDING_BOMB_SPOT') {
+      this.state = 'COLLECTING';
+      const dir = this.moveToward(nearbyPowerUp.x, nearbyPowerUp.y, myX, myY, grid);
+      return { direction: dir, placeBomb: false };
+    }
 
-    if (this.state.currentPath.length > 0) {
-      const nextNode = this.state.currentPath[0];
-      // If we are already at the next node (overlapping), skip it
-      if (this.player.position.gridX === nextNode.x && this.player.position.gridY === nextNode.y) {
-        this.state.currentPath.shift();
-        if (this.state.currentPath.length > 0) {
-          direction = this.getDirectionToNode(this.state.currentPath[0]);
+    // State machine
+    switch (this.state) {
+      case 'FINDING_BOMB_SPOT':
+        return this.handleFindingBombSpot(grid, myX, myY, players, currentTime);
+
+      case 'MOVING_TO_BOMB_SPOT':
+        return this.handleMovingToBombSpot(grid, myX, myY, currentTime);
+
+      case 'COLLECTING':
+        // If we reached the power-up or it's gone, go back to bombing
+        if (!nearbyPowerUp || (myX === nearbyPowerUp.x && myY === nearbyPowerUp.y)) {
+          this.state = 'FINDING_BOMB_SPOT';
         }
-      } else {
-        direction = this.getDirectionToNode(nextNode);
-      }
-    }
+        return { direction: nearbyPowerUp ? this.moveToward(nearbyPowerUp.x, nearbyPowerUp.y, myX, myY, grid) : null, placeBomb: false };
 
-    return { direction, placeBomb };
+      default:
+        this.state = 'FINDING_BOMB_SPOT';
+        return { direction: null, placeBomb: false };
+    }
   }
 
-  private buildGrid(
+  // STEP 1: Find a good bomb placement location with escape route
+  private handleFindingBombSpot(
+    grid: DangerCell[][],
+    myX: number,
+    myY: number,
+    players: Player[],
+    currentTime: number
+  ): { direction: Direction | null; placeBomb: boolean } {
+
+    const canPlaceBomb = this.player.canPlaceBomb() &&
+                         (currentTime - this.lastBombTime) > this.settings.minBombCooldown;
+
+    if (!canPlaceBomb) {
+      // Can't place bombs yet, just wander safely
+      const wanderDir = this.findWanderDirection(grid, myX, myY);
+      return { direction: wanderDir, placeBomb: false };
+    }
+
+    // Try to find a bomb spot - prioritize based on aggressiveness
+    let plan: BombPlan | null = null;
+
+    // Higher aggressiveness = try to attack players first
+    if (Math.random() < this.settings.aggressiveness) {
+      plan = this.findAttackBombSpot(grid, myX, myY, players);
+    }
+
+    // If no attack opportunity or low aggressiveness, find blocks to destroy
+    if (!plan) {
+      plan = this.findBlockBombSpot(grid, myX, myY);
+    }
+
+    // Fallback to attack if no blocks nearby
+    if (!plan) {
+      plan = this.findAttackBombSpot(grid, myX, myY, players);
+    }
+
+    if (!plan) {
+      // No good bomb spots, just wander
+      const wanderDir = this.findWanderDirection(grid, myX, myY);
+      return { direction: wanderDir, placeBomb: false };
+    }
+
+    this.currentPlan = plan;
+
+    // Are we already at the bomb spot?
+    if (myX === plan.bombX && myY === plan.bombY) {
+      // STEP 2: Place bomb and immediately start escaping
+      this.lastBombTime = currentTime;
+      this.state = 'ESCAPING';
+
+      // Start moving toward escape immediately
+      const escapeDir = this.moveToward(plan.escapeX, plan.escapeY, myX, myY, grid);
+      return { direction: escapeDir, placeBomb: true };
+    }
+
+    // Need to move to bomb spot first
+    this.state = 'MOVING_TO_BOMB_SPOT';
+    const moveDir = this.moveToward(plan.bombX, plan.bombY, myX, myY, grid);
+    return { direction: moveDir, placeBomb: false };
+  }
+
+  // STEP 2: Move to the bomb placement location
+  private handleMovingToBombSpot(
+    grid: DangerCell[][],
+    myX: number,
+    myY: number,
+    currentTime: number
+  ): { direction: Direction | null; placeBomb: boolean } {
+
+    if (!this.currentPlan) {
+      this.state = 'FINDING_BOMB_SPOT';
+      return { direction: null, placeBomb: false };
+    }
+
+    const plan = this.currentPlan;
+
+    // Reached the bomb spot?
+    if (myX === plan.bombX && myY === plan.bombY) {
+      // Verify escape route is still valid
+      const escapeStillValid = this.verifyEscapeRoute(grid, myX, myY, plan.escapeX, plan.escapeY);
+
+      if (!escapeStillValid) {
+        // Recalculate escape or abort
+        const newEscape = this.findEscapeFrom(grid, myX, myY);
+        if (newEscape) {
+          plan.escapeX = newEscape.x;
+          plan.escapeY = newEscape.y;
+        } else {
+          // Can't escape safely, abort and find new plan
+          this.state = 'FINDING_BOMB_SPOT';
+          this.currentPlan = null;
+          return { direction: null, placeBomb: false };
+        }
+      }
+
+      // Place bomb and escape!
+      this.lastBombTime = currentTime;
+      this.state = 'ESCAPING';
+      const escapeDir = this.moveToward(plan.escapeX, plan.escapeY, myX, myY, grid);
+      return { direction: escapeDir, placeBomb: true };
+    }
+
+    // Keep moving to bomb spot
+    const moveDir = this.moveToward(plan.bombX, plan.bombY, myX, myY, grid);
+
+    // If we can't move, recalculate
+    if (!moveDir) {
+      this.state = 'FINDING_BOMB_SPOT';
+      this.currentPlan = null;
+    }
+
+    return { direction: moveDir, placeBomb: false };
+  }
+
+  // Continue current action without full recalculation
+  private continueCurrentAction(
+    grid: DangerCell[][],
+    myX: number,
+    myY: number
+  ): { direction: Direction | null; placeBomb: boolean } {
+
+    if (this.state === 'MOVING_TO_BOMB_SPOT' && this.currentPlan) {
+      const dir = this.moveToward(this.currentPlan.bombX, this.currentPlan.bombY, myX, myY, grid);
+      return { direction: dir, placeBomb: false };
+    }
+
+    if (this.state === 'ESCAPING' && this.currentPlan) {
+      const dir = this.moveToward(this.currentPlan.escapeX, this.currentPlan.escapeY, myX, myY, grid);
+      return { direction: dir, placeBomb: false };
+    }
+
+    return { direction: null, placeBomb: false };
+  }
+
+  // Find a spot to bomb near a player
+  private findAttackBombSpot(
+    grid: DangerCell[][],
+    myX: number,
+    myY: number,
+    players: Player[]
+  ): BombPlan | null {
+    const enemies = players.filter(p => p !== this.player && p.isPlayerAlive());
+    if (enemies.length === 0) return null;
+
+    // Find closest enemy
+    let closestEnemy: Player | null = null;
+    let closestDist = Infinity;
+
+    for (const enemy of enemies) {
+      const dist = Math.abs(enemy.position.gridX - myX) + Math.abs(enemy.position.gridY - myY);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestEnemy = enemy;
+      }
+    }
+
+    if (!closestEnemy) return null;
+
+    const enemyX = closestEnemy.position.gridX;
+    const enemyY = closestEnemy.position.gridY;
+    const bombRange = this.player.bombRange;
+
+    // Find positions where we could bomb the enemy
+    const candidates: { bombX: number; bombY: number; escapeX: number; escapeY: number; dist: number }[] = [];
+
+    // Check positions in line with enemy
+    const directions = [
+      { dx: 0, dy: -1 },
+      { dx: 0, dy: 1 },
+      { dx: -1, dy: 0 },
+      { dx: 1, dy: 0 }
+    ];
+
+    for (const { dx, dy } of directions) {
+      for (let i = 1; i <= bombRange; i++) {
+        const bombX = enemyX + dx * i;
+        const bombY = enemyY + dy * i;
+
+        if (!this.isValidBombSpot(grid, bombX, bombY)) continue;
+
+        // Find escape route from this bomb position
+        const escape = this.findEscapeFrom(grid, bombX, bombY);
+        if (!escape) continue;
+
+        const distToMe = Math.abs(bombX - myX) + Math.abs(bombY - myY);
+        candidates.push({ bombX, bombY, escapeX: escape.x, escapeY: escape.y, dist: distToMe });
+      }
+    }
+
+    if (candidates.length === 0) return null;
+
+    // Pick closest valid spot
+    candidates.sort((a, b) => a.dist - b.dist);
+    const best = candidates[0];
+    return { bombX: best.bombX, bombY: best.bombY, escapeX: best.escapeX, escapeY: best.escapeY };
+  }
+
+  // Find a spot to bomb near destructible blocks
+  private findBlockBombSpot(
+    grid: DangerCell[][],
+    myX: number,
+    myY: number
+  ): BombPlan | null {
+    const candidates: { bombX: number; bombY: number; escapeX: number; escapeY: number; score: number }[] = [];
+
+    // Search for good bomb spots near blocks
+    for (let y = 1; y < GRID_HEIGHT - 1; y++) {
+      for (let x = 1; x < GRID_WIDTH - 1; x++) {
+        if (!this.isValidBombSpot(grid, x, y)) continue;
+
+        // Count adjacent destructible blocks
+        const blockCount = this.countAdjacentBlocks(grid, x, y);
+        if (blockCount === 0) continue;
+
+        // Find escape route
+        const escape = this.findEscapeFrom(grid, x, y);
+        if (!escape) continue;
+
+        const dist = Math.abs(x - myX) + Math.abs(y - myY);
+        // Score: more blocks = better, closer = better
+        const score = blockCount * 10 - dist;
+
+        candidates.push({ bombX: x, bombY: y, escapeX: escape.x, escapeY: escape.y, score });
+      }
+    }
+
+    if (candidates.length === 0) return null;
+
+    // Sort by score (higher is better)
+    candidates.sort((a, b) => b.score - a.score);
+
+    // Pick from top candidates with some randomness
+    const topN = Math.min(3, candidates.length);
+    const pick = Math.floor(Math.random() * topN);
+    const best = candidates[pick];
+
+    return { bombX: best.bombX, bombY: best.bombY, escapeX: best.escapeX, escapeY: best.escapeY };
+  }
+
+  private isValidBombSpot(grid: DangerCell[][], x: number, y: number): boolean {
+    if (x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT) return false;
+    const cell = grid[y]?.[x];
+    return cell !== undefined && cell.isWalkable && cell.dangerTime === Infinity;
+  }
+
+  private countAdjacentBlocks(grid: DangerCell[][], x: number, y: number): number {
+    let count = 0;
+    const neighbors = [
+      grid[y - 1]?.[x],
+      grid[y + 1]?.[x],
+      grid[y]?.[x - 1],
+      grid[y]?.[x + 1]
+    ];
+
+    for (const n of neighbors) {
+      if (n && !n.isWalkable && n.hasDestructibleBlock) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  // Find escape route from a position after placing bomb there
+  private findEscapeFrom(grid: DangerCell[][], bombX: number, bombY: number): { x: number; y: number } | null {
+    const bombRange = this.player.bombRange;
+    const playerSpeed = this.player.getEffectiveSpeed();
+    const maxEscapeTime = BOMB_FUSE_TIME - 0.5; // Safety margin
+
+    const escapeOptions: { x: number; y: number; dist: number; safety: number }[] = [];
+
+    // Check each cardinal direction
+    const directions = [
+      { dx: 0, dy: -1 },
+      { dx: 0, dy: 1 },
+      { dx: -1, dy: 0 },
+      { dx: 1, dy: 0 }
+    ];
+
+    for (const { dx, dy } of directions) {
+      // Walk along this direction looking for escape
+      for (let i = 1; i <= bombRange + 3; i++) {
+        const checkX = bombX + dx * i;
+        const checkY = bombY + dy * i;
+
+        const cell = grid[checkY]?.[checkX];
+        if (!cell || !cell.isWalkable) break; // Hit a wall
+
+        // Check perpendicular directions for escape (blast doesn't turn corners!)
+        const perpDirs = dx === 0
+          ? [{ dx: -1, dy: 0 }, { dx: 1, dy: 0 }]
+          : [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }];
+
+        for (const perp of perpDirs) {
+          const escapeX = checkX + perp.dx;
+          const escapeY = checkY + perp.dy;
+          const escapeCell = grid[escapeY]?.[escapeX];
+
+          if (escapeCell && escapeCell.isWalkable && escapeCell.dangerTime === Infinity) {
+            // This is a safe escape spot!
+            const dist = i + 1; // Distance to reach this spot
+            const timeNeeded = dist / playerSpeed;
+
+            if (timeNeeded < maxEscapeTime) {
+              escapeOptions.push({ x: escapeX, y: escapeY, dist, safety: 100 });
+            }
+          }
+        }
+
+        // Also check if we can escape by going past the bomb range in this direction
+        if (i > bombRange) {
+          const timeNeeded = i / playerSpeed;
+          if (timeNeeded < maxEscapeTime && cell.dangerTime === Infinity) {
+            escapeOptions.push({ x: checkX, y: checkY, dist: i, safety: 90 });
+          }
+        }
+      }
+    }
+
+    if (escapeOptions.length === 0) return null;
+
+    // Sort by distance (shorter is better since we want to escape quickly)
+    escapeOptions.sort((a, b) => a.dist - b.dist);
+    return { x: escapeOptions[0].x, y: escapeOptions[0].y };
+  }
+
+  private verifyEscapeRoute(
+    grid: DangerCell[][],
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number
+  ): boolean {
+    // Simple check: is the escape target still safe and reachable?
+    const targetCell = grid[toY]?.[toX];
+    if (!targetCell || !targetCell.isWalkable || targetCell.dangerTime < Infinity) {
+      return false;
+    }
+
+    // Check if path exists (simple line check)
+    const dx = Math.sign(toX - fromX);
+    const dy = Math.sign(toY - fromY);
+
+    let x = fromX;
+    let y = fromY;
+
+    while (x !== toX || y !== toY) {
+      if (x !== toX) x += dx;
+      if (y !== toY) y += dy;
+
+      const cell = grid[y]?.[x];
+      if (!cell || !cell.isWalkable) return false;
+    }
+
+    return true;
+  }
+
+  // Find best escape direction when in danger
+  private findBestEscapeDirection(grid: DangerCell[][], myX: number, myY: number): Direction | null {
+    const directions = [
+      { dir: Direction.UP, dx: 0, dy: -1 },
+      { dir: Direction.DOWN, dx: 0, dy: 1 },
+      { dir: Direction.LEFT, dx: -1, dy: 0 },
+      { dir: Direction.RIGHT, dx: 1, dy: 0 }
+    ];
+
+    let bestDir: Direction | null = null;
+    let bestScore = -Infinity;
+
+    for (const { dir, dx, dy } of directions) {
+      const nx = myX + dx;
+      const ny = myY + dy;
+
+      const cell = grid[ny]?.[nx];
+      if (!cell || !cell.isWalkable) continue;
+
+      let score = 0;
+
+      // Strongly prefer completely safe cells
+      if (cell.dangerTime === Infinity) {
+        score += 10000;
+      } else {
+        // Prefer cells with more time
+        score += cell.dangerTime * 100;
+      }
+
+      // Bonus for leading to more safe cells
+      const safeNeighbors = this.countSafeNeighbors(grid, nx, ny);
+      score += safeNeighbors * 500;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestDir = dir;
+      }
+    }
+
+    return bestDir;
+  }
+
+  private countSafeNeighbors(grid: DangerCell[][], x: number, y: number): number {
+    let count = 0;
+    const neighbors = [
+      grid[y - 1]?.[x],
+      grid[y + 1]?.[x],
+      grid[y]?.[x - 1],
+      grid[y]?.[x + 1]
+    ];
+
+    for (const n of neighbors) {
+      if (n && n.isWalkable && n.dangerTime === Infinity) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  private findWanderDirection(grid: DangerCell[][], myX: number, myY: number): Direction | null {
+    // Find direction toward nearest destructible block
+    let bestDir: Direction | null = null;
+    let bestScore = -Infinity;
+
+    const directions = [
+      { dir: Direction.UP, dx: 0, dy: -1 },
+      { dir: Direction.DOWN, dx: 0, dy: 1 },
+      { dir: Direction.LEFT, dx: -1, dy: 0 },
+      { dir: Direction.RIGHT, dx: 1, dy: 0 }
+    ];
+
+    for (const { dir, dx, dy } of directions) {
+      const nx = myX + dx;
+      const ny = myY + dy;
+
+      const cell = grid[ny]?.[nx];
+      if (!cell || !cell.isWalkable || cell.dangerTime < Infinity) continue;
+
+      let score = Math.random() * 10; // Base randomness
+
+      // Bonus for cells near blocks
+      const blockNeighbors = this.countAdjacentBlocks(grid, nx, ny);
+      score += blockNeighbors * 20;
+
+      // Bonus for cells with power-ups nearby
+      if (cell.hasPowerUp) score += 50;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestDir = dir;
+      }
+    }
+
+    return bestDir;
+  }
+
+  private findNearbyPowerUp(
+    grid: DangerCell[][],
+    powerUps: PowerUp[],
+    myX: number,
+    myY: number
+  ): { x: number; y: number } | null {
+    let nearest: { x: number; y: number; dist: number } | null = null;
+
+    for (const powerUp of powerUps) {
+      if (!powerUp.isActive) continue;
+
+      const px = powerUp.position.gridX;
+      const py = powerUp.position.gridY;
+
+      const cell = grid[py]?.[px];
+      if (!cell || cell.dangerTime < Infinity) continue;
+
+      const dist = Math.abs(px - myX) + Math.abs(py - myY);
+
+      // Only pick up very close power-ups
+      if (dist <= 3 && (!nearest || dist < nearest.dist)) {
+        nearest = { x: px, y: py, dist };
+      }
+    }
+
+    return nearest;
+  }
+
+  private moveToward(
+    targetX: number,
+    targetY: number,
+    myX: number,
+    myY: number,
+    grid: DangerCell[][]
+  ): Direction | null {
+    const dx = targetX - myX;
+    const dy = targetY - myY;
+
+    // Determine preferred directions
+    const preferredDirs: Direction[] = [];
+
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      if (dx > 0) preferredDirs.push(Direction.RIGHT);
+      else if (dx < 0) preferredDirs.push(Direction.LEFT);
+      if (dy > 0) preferredDirs.push(Direction.DOWN);
+      else if (dy < 0) preferredDirs.push(Direction.UP);
+    } else {
+      if (dy > 0) preferredDirs.push(Direction.DOWN);
+      else if (dy < 0) preferredDirs.push(Direction.UP);
+      if (dx > 0) preferredDirs.push(Direction.RIGHT);
+      else if (dx < 0) preferredDirs.push(Direction.LEFT);
+    }
+
+    // Try preferred directions first
+    for (const dir of preferredDirs) {
+      if (this.canMove(dir, myX, myY, grid)) {
+        return dir;
+      }
+    }
+
+    // Try any valid direction
+    const allDirs = [Direction.UP, Direction.DOWN, Direction.LEFT, Direction.RIGHT];
+    for (const dir of allDirs) {
+      if (this.canMove(dir, myX, myY, grid)) {
+        return dir;
+      }
+    }
+
+    return null;
+  }
+
+  private canMove(dir: Direction, myX: number, myY: number, grid: DangerCell[][]): boolean {
+    let nx = myX;
+    let ny = myY;
+
+    switch (dir) {
+      case Direction.UP: ny--; break;
+      case Direction.DOWN: ny++; break;
+      case Direction.LEFT: nx--; break;
+      case Direction.RIGHT: nx++; break;
+    }
+
+    const cell = grid[ny]?.[nx];
+    return cell !== undefined && cell.isWalkable;
+  }
+
+  private buildDangerGrid(
     blocks: Block[],
     bombs: Bomb[],
     explosions: Explosion[],
-    powerUps: PowerUp[],
-    players: Player[]
-  ): GridCell[][] {
-    const grid: GridCell[][] = [];
+    powerUps: PowerUp[]
+  ): DangerCell[][] {
+    const grid: DangerCell[][] = [];
 
     // Initialize grid
     for (let y = 0; y < GRID_HEIGHT; y++) {
@@ -258,113 +689,69 @@ export class AIController {
           x,
           y,
           isWalkable: true,
-          isDangerous: false,
           dangerTime: Infinity,
+          hasBomb: false,
           hasPowerUp: false,
-          hasPlayer: false,
-          hasBomb: false
+          hasDestructibleBlock: false
         };
       }
     }
 
     // Mark blocks
     for (const block of blocks) {
-      if (block.isActive) {
-        const cell = grid[block.position.gridY]?.[block.position.gridX];
-        if (cell) {
-          cell.isWalkable = false;
-        }
+      if (!block.isActive) continue;
+      const cell = grid[block.position.gridY]?.[block.position.gridX];
+      if (cell) {
+        cell.isWalkable = false;
+        cell.hasDestructibleBlock = block.isDestructible;
       }
     }
 
-    // Mark bombs and their explosion paths
+    // Mark bombs and danger zones
     for (const bomb of bombs) {
       if (!bomb.isActive) continue;
 
       const bx = bomb.position.gridX;
       const by = bomb.position.gridY;
+      const explodeTime = bomb.timer;
 
       if (grid[by]?.[bx]) {
         grid[by][bx].isWalkable = false;
         grid[by][bx].hasBomb = true;
-        grid[by][bx].isDangerous = true;
-        grid[by][bx].dangerTime = Math.min(grid[by][bx].dangerTime, bomb.timer);
+        grid[by][bx].dangerTime = Math.min(grid[by][bx].dangerTime, explodeTime);
       }
 
-      // Mark explosion paths
-      const directions = [
-        { dx: 0, dy: -1 },
-        { dx: 0, dy: 1 },
-        { dx: -1, dy: 0 },
-        { dx: 1, dy: 0 }
-      ];
-
-      for (const { dx, dy } of directions) {
-        for (let i = 1; i <= bomb.range; i++) {
-          const tx = bx + dx * i;
-          const ty = by + dy * i;
-
-          if (tx < 0 || tx >= GRID_WIDTH || ty < 0 || ty >= GRID_HEIGHT) break;
-
-          const cell = grid[ty][tx];
-          if (!cell.isWalkable && !cell.hasBomb) break; // Hit a wall
-
-          cell.isDangerous = true;
-          cell.dangerTime = Math.min(cell.dangerTime, bomb.timer);
-        }
-      }
+      // Mark blast zones
+      this.markBlastZone(grid, bx, by, bomb.range, explodeTime);
     }
 
-    // Pass 2: Propagate chain reactions
-    // If a bomb is hit by an explosion (from another bomb), its timer becomes the explosion time
+    // Handle chain reactions
     let changed = true;
-    while (changed) {
+    let iterations = 0;
+    while (changed && iterations < 10) {
       changed = false;
+      iterations++;
+
       for (const bomb of bombs) {
         if (!bomb.isActive) continue;
 
-        const cell = grid[bomb.position.gridY][bomb.position.gridX];
+        const bombCell = grid[bomb.position.gridY]?.[bomb.position.gridX];
+        if (!bombCell) continue;
 
-        // If this bomb is in danger (hit by another), update its dangerTime
-        if (cell.isDangerous && cell.dangerTime < bomb.timer) {
-          const newTime = cell.dangerTime;
-
-          const directions = [
-            { dx: 0, dy: -1 },
-            { dx: 0, dy: 1 },
-            { dx: -1, dy: 0 },
-            { dx: 1, dy: 0 }
-          ];
-
-          for (const { dx, dy } of directions) {
-            for (let i = 1; i <= bomb.range; i++) {
-              const tx = bomb.position.gridX + dx * i;
-              const ty = bomb.position.gridY + dy * i;
-
-              if (tx < 0 || tx >= GRID_WIDTH || ty < 0 || ty >= GRID_HEIGHT) break;
-
-              const targetCell = grid[ty][tx];
-              if (!targetCell.isWalkable && !targetCell.hasBomb) break;
-
-              if (!targetCell.isDangerous || targetCell.dangerTime > newTime) {
-                targetCell.isDangerous = true;
-                targetCell.dangerTime = newTime;
-                changed = true;
-              }
-            }
-          }
+        if (bombCell.dangerTime < bomb.timer) {
+          const wasChanged = this.markBlastZone(grid, bomb.position.gridX, bomb.position.gridY, bomb.range, bombCell.dangerTime);
+          if (wasChanged) changed = true;
         }
       }
     }
 
-    // Mark active explosions as dangerous
+    // Mark active explosions
     for (const explosion of explosions) {
       if (!explosion.isActive) continue;
 
       for (const tile of explosion.tiles) {
         const cell = grid[tile.gridY]?.[tile.gridX];
         if (cell) {
-          cell.isDangerous = true;
           cell.dangerTime = 0;
         }
       }
@@ -372,237 +759,18 @@ export class AIController {
 
     // Mark power-ups
     for (const powerUp of powerUps) {
-      if (powerUp.isActive) {
-        const cell = grid[powerUp.position.gridY]?.[powerUp.position.gridX];
-        if (cell) {
-          cell.hasPowerUp = true;
-        }
-      }
-    }
-
-    // Mark other players
-    for (const p of players) {
-      if (p.isPlayerAlive() && p !== this.player) {
-        const cell = grid[p.position.gridY]?.[p.position.gridX];
-        if (cell) {
-          cell.hasPlayer = true;
-        }
+      if (!powerUp.isActive) continue;
+      const cell = grid[powerUp.position.gridY]?.[powerUp.position.gridX];
+      if (cell) {
+        cell.hasPowerUp = true;
       }
     }
 
     return grid;
   }
 
-  private assessDanger(grid: GridCell[][]): { isInDanger: boolean; dangerLevel: number } {
-    const px = this.player.position.gridX;
-    const py = this.player.position.gridY;
-
-    const cell = grid[py]?.[px];
-    if (!cell) return { isInDanger: false, dangerLevel: 0 };
-
-    // Check current position
-    if (cell.isDangerous) {
-      return { isInDanger: true, dangerLevel: cell.dangerTime < 1.5 ? 1 : 0.7 };
-    }
-
-    // Check adjacent cells for incoming danger
-    const neighbors = [
-      grid[py - 1]?.[px],
-      grid[py + 1]?.[px],
-      grid[py]?.[px - 1],
-      grid[py]?.[px + 1]
-    ];
-
-    for (const neighbor of neighbors) {
-      if (neighbor && neighbor.isDangerous && neighbor.dangerTime < 2) {
-        return { isInDanger: true, dangerLevel: 0.5 };
-      }
-    }
-
-    return { isInDanger: false, dangerLevel: 0 };
-  }
-
-  private findSafeSpot(grid: GridCell[][]): { x: number; y: number } | null {
-    const px = this.player.position.gridX;
-    const py = this.player.position.gridY;
-
-    // BFS to find nearest safe spot with escape routes
-    const visited = new Set<string>();
-    const queue: { x: number; y: number; dist: number }[] = [{ x: px, y: py, dist: 0 }];
-    const safespots: { x: number; y: number; dist: number; score: number }[] = [];
-
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      const key = `${current.x},${current.y}`;
-
-      if (visited.has(key)) continue;
-      visited.add(key);
-
-      const cell = grid[current.y]?.[current.x];
-      if (!cell) continue;
-
-      // Found a safe, walkable spot
-      if (cell.isWalkable && !cell.isDangerous && current.dist > 0) {
-        // Score based on distance and safety (farther from danger = better)
-        let score = 100 - current.dist; // Prefer closer spots
-
-        // Check if this spot has good escape routes (multiple safe neighbors)
-        const safeNeighbors = [
-          grid[current.y - 1]?.[current.x],
-          grid[current.y + 1]?.[current.x],
-          grid[current.y]?.[current.x - 1],
-          grid[current.y]?.[current.x + 1]
-        ].filter(n => n && n.isWalkable && !n.isDangerous);
-
-        score += safeNeighbors.length * 10; // Bonus for more escape routes
-
-        safespots.push({ x: current.x, y: current.y, dist: current.dist, score });
-
-        // If we found a good safe spot nearby, we can stop searching
-        if (safespots.length >= 5) break;
-      }
-
-      // Don't search too far
-      if (current.dist >= 10) continue;
-
-      // Explore neighbors
-      const neighbors = [
-        { x: current.x, y: current.y - 1 },
-        { x: current.x, y: current.y + 1 },
-        { x: current.x - 1, y: current.y },
-        { x: current.x + 1, y: current.y }
-      ];
-
-      for (const n of neighbors) {
-        const nCell = grid[n.y]?.[n.x];
-        if (nCell && nCell.isWalkable && !visited.has(`${n.x},${n.y}`)) {
-          queue.push({ x: n.x, y: n.y, dist: current.dist + 1 });
-        }
-      }
-    }
-
-    // Return the best safe spot
-    if (safespots.length === 0) return null;
-
-    safespots.sort((a, b) => b.score - a.score);
-    return { x: safespots[0].x, y: safespots[0].y };
-  }
-
-  private findNearbyPowerUp(grid: GridCell[][], powerUps: PowerUp[]): { x: number; y: number } | null {
-    const px = this.player.position.gridX;
-    const py = this.player.position.gridY;
-
-    let nearest: { x: number; y: number; dist: number } | null = null;
-
-    for (const powerUp of powerUps) {
-      if (!powerUp.isActive) continue;
-
-      const dist = Math.abs(powerUp.position.gridX - px) + Math.abs(powerUp.position.gridY - py);
-
-      if (dist < 8 && (!nearest || dist < nearest.dist)) {
-        // Check if path is safe
-        const cell = grid[powerUp.position.gridY]?.[powerUp.position.gridX];
-        if (cell && !cell.isDangerous) {
-          nearest = { x: powerUp.position.gridX, y: powerUp.position.gridY, dist };
-        }
-      }
-    }
-
-    return nearest ? { x: nearest.x, y: nearest.y } : null;
-  }
-
-  private findNearbyEnemy(players: Player[]): Player | null {
-    const px = this.player.position.gridX;
-    const py = this.player.position.gridY;
-
-    let nearest: { player: Player; dist: number } | null = null;
-
-    for (const p of players) {
-      if (p === this.player || !p.isPlayerAlive()) continue;
-
-      const dist = Math.abs(p.position.gridX - px) + Math.abs(p.position.gridY - py);
-
-      if (!nearest || dist < nearest.dist) {
-        nearest = { player: p, dist };
-      }
-    }
-
-    return nearest?.player || null;
-  }
-
-  private findWanderTarget(grid: GridCell[][]): { x: number; y: number } | null {
-    const px = this.player.position.gridX;
-    const py = this.player.position.gridY;
-
-    // Look for interesting targets: destructible blocks nearby or open areas
-    const candidates: { x: number; y: number; score: number }[] = [];
-
-    for (let y = 0; y < GRID_HEIGHT; y++) {
-      for (let x = 0; x < GRID_WIDTH; x++) {
-        const cell = grid[y][x];
-        if (!cell.isWalkable || cell.isDangerous) continue;
-
-        const dist = Math.abs(x - px) + Math.abs(y - py);
-        if (dist < 1 || dist > 10) continue;
-
-        let score = 10 - dist;
-
-        // Bonus for cells near destructible blocks
-        const neighbors = [
-          grid[y - 1]?.[x],
-          grid[y + 1]?.[x],
-          grid[y]?.[x - 1],
-          grid[y]?.[x + 1]
-        ];
-
-        for (const n of neighbors) {
-          if (n && !n.isWalkable) {
-            score += 2; // Near a block we might want to destroy
-          }
-        }
-
-        candidates.push({ x, y, score });
-      }
-    }
-
-    if (candidates.length === 0) return null;
-
-    // Sort by score and pick randomly from top candidates
-    candidates.sort((a, b) => b.score - a.score);
-    const topCandidates = candidates.slice(0, Math.min(5, candidates.length));
-    return topCandidates[Math.floor(Math.random() * topCandidates.length)];
-  }
-
-  private isNearDestructibleBlock(grid: GridCell[][]): boolean {
-    const px = this.player.position.gridX;
-    const py = this.player.position.gridY;
-
-    const neighbors = [
-      grid[py - 1]?.[px],
-      grid[py + 1]?.[px],
-      grid[py]?.[px - 1],
-      grid[py]?.[px + 1]
-    ];
-
-    return neighbors.some(n => n && !n.isWalkable && !n.hasBomb);
-  }
-
-  private canPlaceBombSafely(grid: GridCell[][]): boolean {
-    if (!this.player.canPlaceBomb()) return false;
-
-    const px = this.player.position.gridX;
-    const py = this.player.position.gridY;
-
-    // Simulate bomb placement and check if there's an escape route
-    const bombRange = this.player.bombRange;
-    const bombFuseTime = 3.0; // seconds until bomb explodes
-    const playerSpeed = this.player.getEffectiveSpeed(); // tiles per second
-    const safetyMargin = 1.05; // require 5% extra time for safety
-
-    // Mark cells that would be dangerous
-    const dangerousCells = new Set<string>();
-    dangerousCells.add(`${px},${py}`);
-
+  private markBlastZone(grid: DangerCell[][], bx: number, by: number, range: number, dangerTime: number): boolean {
+    let changed = false;
     const directions = [
       { dx: 0, dy: -1 },
       { dx: 0, dy: 1 },
@@ -610,126 +778,39 @@ export class AIController {
       { dx: 1, dy: 0 }
     ];
 
-    // Calculate explosion zone
     for (const { dx, dy } of directions) {
-      for (let i = 1; i <= bombRange; i++) {
-        const tx = px + dx * i;
-        const ty = py + dy * i;
+      for (let i = 1; i <= range; i++) {
+        const tx = bx + dx * i;
+        const ty = by + dy * i;
 
         if (tx < 0 || tx >= GRID_WIDTH || ty < 0 || ty >= GRID_HEIGHT) break;
 
-        const cell = grid[ty]?.[tx];
-        if (!cell) break;
+        const cell = grid[ty][tx];
 
-        // Stop at walls but mark the position as dangerous anyway
-        if (!cell.isWalkable) {
-          if (!cell.hasBomb) break; // Hard wall blocks explosion
-        }
-
-        dangerousCells.add(`${tx},${ty}`);
-      }
-    }
-
-    // BFS to find escape route with time calculation
-    const visited = new Set<string>();
-    const queue: { x: number; y: number; dist: number }[] = [{ x: px, y: py, dist: 0 }];
-
-    let bestSafeSpot: { x: number; y: number; dist: number } | null = null;
-
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      const key = `${current.x},${current.y}`;
-
-      if (visited.has(key)) continue;
-      visited.add(key);
-
-      const cell = grid[current.y]?.[current.x];
-      if (!cell) continue;
-
-      // Check if this is a safe spot
-      const isSafe = !dangerousCells.has(key) && !cell.isDangerous;
-
-      if (isSafe && current.dist > 0) {
-        // Calculate time needed to reach this spot
-        const timeNeeded = current.dist / playerSpeed;
-        const timeAvailable = bombFuseTime / safetyMargin;
-
-        // Found a safe spot we can reach in time
-        if (timeNeeded < timeAvailable) {
-          if (!bestSafeSpot || current.dist < bestSafeSpot.dist) {
-            bestSafeSpot = { x: current.x, y: current.y, dist: current.dist };
+        if (!cell.isWalkable && !cell.hasBomb) {
+          if (cell.hasDestructibleBlock && cell.dangerTime > dangerTime) {
+            cell.dangerTime = dangerTime;
+            changed = true;
           }
+          break;
         }
-      }
 
-      // Don't search too far
-      if (current.dist >= 8) continue;
-
-      // Continue searching
-      for (const { dx, dy } of directions) {
-        const nx = current.x + dx;
-        const ny = current.y + dy;
-        const nKey = `${nx},${ny}`;
-        const nCell = grid[ny]?.[nx];
-
-        if (nCell && nCell.isWalkable && !nCell.isDangerous && !visited.has(nKey)) {
-          queue.push({ x: nx, y: ny, dist: current.dist + 1 });
+        if (cell.dangerTime > dangerTime) {
+          cell.dangerTime = dangerTime;
+          changed = true;
         }
       }
     }
 
-    // Only place bomb if we found a safe escape route
-    return bestSafeSpot !== null;
+    return changed;
   }
 
-  private isAtTarget(): boolean {
-    return this.player.position.gridX === this.state.targetX &&
-      this.player.position.gridY === this.state.targetY;
-  }
-
-  private checkIfStuck(deltaTime: number): void {
-    const currentPos = {
-      x: this.player.position.gridX,
-      y: this.player.position.gridY
+  getState(): { currentGoal: string; targetX: number; targetY: number } {
+    return {
+      currentGoal: this.state,
+      targetX: this.currentPlan?.bombX ?? 0,
+      targetY: this.currentPlan?.bombY ?? 0
     };
-
-    if (currentPos.x === this.state.lastPosition.x &&
-      currentPos.y === this.state.lastPosition.y) {
-      this.state.stuckTimer += deltaTime;
-    } else {
-      this.state.stuckTimer = 0;
-    }
-
-    this.state.lastPosition = currentPos;
-  }
-
-  private getDirectionToNode(node: { x: number; y: number }): Direction | null {
-    const px = this.player.position.gridX;
-    const py = this.player.position.gridY;
-    const tx = node.x;
-    const ty = node.y;
-
-    const dx = tx - px;
-    const dy = ty - py;
-
-    if (Math.abs(dx) > Math.abs(dy)) {
-      return dx > 0 ? Direction.RIGHT : Direction.LEFT;
-    } else if (Math.abs(dy) > Math.abs(dx)) {
-      return dy > 0 ? Direction.DOWN : Direction.UP;
-    }
-
-    return null;
-  }
-
-  private isValidTarget(x: number, y: number, grid: GridCell[][]): boolean {
-    if (x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT) return false;
-    const cell = grid[y][x];
-    return cell && cell.isWalkable && !cell.isDangerous;
-  }
-
-
-  getState(): AIState {
-    return this.state;
   }
 
   getDifficulty(): string {

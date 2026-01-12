@@ -35,6 +35,7 @@ export class Game {
   private blocks: Block[] = [];
   private explosions: Explosion[] = [];
   private powerUps: PowerUp[] = [];
+  private pendingPowerUps: { x: number; y: number; type: PowerUpType }[] = [];
   private floatingTexts: FloatingText[] = [];
 
   private scoreManager: ScoreManager;
@@ -211,7 +212,7 @@ export class Game {
     }
 
     // Update AI controllers and get AI decisions
-    const currentTime = performance.now();
+    const currentTime = performance.now() / 1000;
     const aiDecisions: Map<number, { direction: Direction | null; placeBomb: boolean }> = new Map();
 
     for (const [playerIndex, aiController] of this.aiControllers) {
@@ -260,6 +261,11 @@ export class Game {
         }
       }
 
+      // Apply bomb placement BEFORE movement to ensure consistency with AI grid simulation
+      if (shouldPlaceBomb) {
+        this.tryPlaceBomb(player);
+      }
+
       // Apply movement
       if (direction) {
         this.movePlayer(player, direction, deltaTime);
@@ -267,14 +273,12 @@ export class Game {
         player.stopMoving();
       }
 
-      // Apply bomb placement
-      if (shouldPlaceBomb) {
-        this.tryPlaceBomb(player);
-      }
-
       // Check power-up collection
       this.checkPowerUpCollection(player);
     }
+
+    // Process pending power-ups (from block destruction)
+    this.processPendingPowerUps();
 
     // Update entities
     for (const player of this.players) {
@@ -390,6 +394,7 @@ export class Game {
     this.bombs = [];
     this.explosions = [];
     this.powerUps = [];
+    this.pendingPowerUps = [];
     this.floatingTexts = [];
     this.scoreManager = new ScoreManager(4);
     this.roundTime = ROUND_TIME;
@@ -531,7 +536,33 @@ export class Game {
           entity.ownerHasLeft = true;
         }
 
-        // Block movement for ALL bombs (including own bombs once ownerHasLeft is true)
+        // Calculate positions for direction check
+        const bombCenterX = bombGridX * TILE_SIZE + TILE_SIZE / 2;
+        const bombCenterY = bombGridY * TILE_SIZE + TILE_SIZE / 2;
+        const playerCenterX = player.position.pixelX + TILE_SIZE / 2;
+        const playerCenterY = player.position.pixelY + TILE_SIZE / 2;
+
+        // Check if player is moving TOWARDS the bomb (trying to enter)
+        // vs moving AWAY from the bomb (trying to exit)
+        const movingTowardsBomb = (
+          (direction === Direction.LEFT && playerCenterX > bombCenterX) ||
+          (direction === Direction.RIGHT && playerCenterX < bombCenterX) ||
+          (direction === Direction.UP && playerCenterY > bombCenterY) ||
+          (direction === Direction.DOWN && playerCenterY < bombCenterY)
+        );
+
+        if (movingTowardsBomb) {
+          // Player is trying to ENTER the bomb - block and apply juicy pushback
+          canMove = false;
+          const pushDirX = playerCenterX - bombCenterX;
+          const pushDirY = playerCenterY - bombCenterY;
+          player.applyPushback(pushDirX, pushDirY, 180);
+          break;
+        } else if (entity.owner === player) {
+          // Player is moving AWAY from their own bomb - let them exit
+          continue;
+        }
+        // Moving away from another player's bomb - just block without pushback
         canMove = false;
         break;
       }
@@ -900,6 +931,13 @@ export class Game {
   private onBombExplode(data: { bomb: Bomb; gridX: number; gridY: number; range: number; type: BombType }): void {
     const { bomb, gridX, gridY, range, type } = data;
 
+    // Safety check: ignore explosions from bombs that are no longer tracked (e.g. from previous game)
+    if (!this.bombs.includes(bomb)) {
+      console.log(`[DEBUG] IGNORED ghost bomb explosion at (${gridX}, ${gridY})`);
+      return;
+    }
+    console.log(`[DEBUG] Bomb exploded at (${gridX}, ${gridY}) owned by Player ${bomb.owner.playerIndex}`);
+
     // Clear bomb from grid
     if (this.grid[gridY][gridX] === bomb) {
       this.grid[gridY][gridX] = null;
@@ -1068,12 +1106,27 @@ export class Game {
     // Maybe spawn a power-up (delayed to avoid being destroyed by the same explosion)
     if (Math.random() < POWERUP_SPAWN_CHANCE) {
       const type = this.getRandomPowerUpType();
-      // Use setTimeout to spawn after the current explosion finishes processing
-      setTimeout(() => {
-        const powerUp = new PowerUp(data.gridX, data.gridY, type);
-        this.powerUps.push(powerUp);
-      }, 0);
+      // Add to pending queue to be spawned in a controlled manner next frame
+      this.pendingPowerUps.push({
+        x: data.gridX,
+        y: data.gridY,
+        type: type
+      });
     }
+  }
+
+  private processPendingPowerUps(): void {
+    if (this.pendingPowerUps.length === 0) return;
+
+    for (const pending of this.pendingPowerUps) {
+      // Final safety check: ensure the tile is still empty (no other explosion just cleared it)
+      if (!this.grid[pending.y][pending.x]) {
+        const powerUp = new PowerUp(pending.x, pending.y, pending.type);
+        this.powerUps.push(powerUp);
+      }
+    }
+
+    this.pendingPowerUps = [];
   }
 
   private getRandomPowerUpType(): PowerUpType {

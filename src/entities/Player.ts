@@ -66,6 +66,12 @@ export class Player extends Entity {
   // For debuffs
   private debuffs: Map<string, number> = new Map();
 
+  // Bomb pushback (juicy collision response)
+  private pushbackVelocityX: number = 0;
+  private pushbackVelocityY: number = 0;
+  private pushbackDecay: number = 12; // How fast pushback decays
+  private pushbackSquashTimer: number = 0;
+
   constructor(gridX: number, gridY: number, playerIndex: number) {
     super(gridX, gridY);
     this.playerIndex = playerIndex;
@@ -88,6 +94,28 @@ export class Player extends Entity {
       } else {
         this.debuffs.set(debuff, newTime);
       }
+    }
+
+    // Apply pushback velocity (bomb collision response)
+    if (Math.abs(this.pushbackVelocityX) > 0.1 || Math.abs(this.pushbackVelocityY) > 0.1) {
+      this.position.pixelX += this.pushbackVelocityX * deltaTime;
+      this.position.pixelY += this.pushbackVelocityY * deltaTime;
+
+      // Update grid position
+      this.position.gridX = Math.round(this.position.pixelX / TILE_SIZE);
+      this.position.gridY = Math.round(this.position.pixelY / TILE_SIZE);
+
+      // Decay pushback with easing
+      this.pushbackVelocityX *= Math.exp(-this.pushbackDecay * deltaTime);
+      this.pushbackVelocityY *= Math.exp(-this.pushbackDecay * deltaTime);
+    } else {
+      this.pushbackVelocityX = 0;
+      this.pushbackVelocityY = 0;
+    }
+
+    // Pushback squash timer
+    if (this.pushbackSquashTimer > 0) {
+      this.pushbackSquashTimer -= deltaTime;
     }
 
     // Animation
@@ -119,6 +147,14 @@ export class Player extends Entity {
       // Recover to normal shape
       this.squashX += (1 - this.squashX) * deltaTime * 10;
       this.squashY += (1 - this.squashY) * deltaTime * 10;
+    }
+
+    // Apply pushback squash effect (bouncy impact feel)
+    if (this.pushbackSquashTimer > 0) {
+      const squashIntensity = this.pushbackSquashTimer / 0.15; // 0.15s is the squash duration
+      const squashAmount = Math.sin(squashIntensity * Math.PI) * 0.25;
+      this.squashX = 1 + squashAmount;
+      this.squashY = 1 - squashAmount * 0.5;
     }
 
     // Blinking
@@ -184,6 +220,26 @@ export class Player extends Entity {
   setVictory(): void {
     this.isVictory = true;
     this.stopMoving();
+  }
+
+  applyPushback(directionX: number, directionY: number, strength: number = 200): void {
+    // Only apply new pushback if not already being pushed back significantly
+    const currentPushbackMagnitude = Math.sqrt(
+      this.pushbackVelocityX * this.pushbackVelocityX +
+      this.pushbackVelocityY * this.pushbackVelocityY
+    );
+    if (currentPushbackMagnitude > strength * 0.3) {
+      return; // Already being pushed, don't stack
+    }
+
+    // Normalize direction
+    const length = Math.sqrt(directionX * directionX + directionY * directionY);
+    if (length > 0) {
+      this.pushbackVelocityX = (directionX / length) * strength;
+      this.pushbackVelocityY = (directionY / length) * strength;
+      this.pushbackSquashTimer = 0.15; // Trigger squash effect
+      EventBus.emit('player-pushback', { player: this });
+    }
   }
 
   render(ctx: CanvasRenderingContext2D, interpolation: number): void {
@@ -575,6 +631,7 @@ export class Player extends Entity {
       return;
     }
     this.isAlive = false;
+    console.log(`[DEBUG] Player ${this.playerIndex} died at (${this.position.gridX}, ${this.position.gridY})`);
     EventBus.emit('player-died', { player: this });
   }
 

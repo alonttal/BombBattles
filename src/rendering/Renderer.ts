@@ -802,220 +802,563 @@ export class Renderer {
   renderMainMenu(playerCount: number = 2, isSinglePlayer: boolean = false, aiDifficulty: 'easy' | 'medium' | 'hard' = 'medium'): void {
     this.ctx.save();
     this.ctx.scale(this.scale, this.scale);
+    const time = Date.now();
 
-    // Animated bright background gradient
-    const bgGradient = this.ctx.createRadialGradient(
-      CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, 0,
-      CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, Math.max(CANVAS_WIDTH, CANVAS_HEIGHT) * 0.8
-    );
-    bgGradient.addColorStop(0, '#87CEEB'); // Sky blue
-    bgGradient.addColorStop(0.5, '#6BB6D6'); // Medium blue
-    bgGradient.addColorStop(1, '#4A9EC1'); // Deep blue
+    // Animated gradient background
+    const bgGradient = this.ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT);
+    bgGradient.addColorStop(0, '#1a1a2e');
+    bgGradient.addColorStop(0.5, '#16213e');
+    bgGradient.addColorStop(1, '#0f3460');
     this.ctx.fillStyle = bgGradient;
     this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    // Animated title with massive glow
-    const titlePulse = 1 + Math.sin(Date.now() / 500) * 0.03;
-    this.ctx.save();
-    this.ctx.translate(CANVAS_WIDTH / 2, 100);
-    this.ctx.scale(titlePulse, titlePulse);
+    // Draw animated background elements
+    this.drawMenuBackground(time);
 
-    // Title shadow layers for depth
-    this.ctx.shadowColor = '#ff6b35';
-    this.ctx.shadowBlur = 60;
-    this.ctx.fillStyle = '#ff6b35';
-    this.ctx.font = 'bold 68px Arial';
-    this.ctx.textAlign = 'center';
-    this.ctx.fillText('PLAYING WITH FIRE', 0, 0);
+    // Draw floating bombs
+    this.drawFloatingBombs(time);
 
-    this.ctx.shadowBlur = 30;
-    this.ctx.fillStyle = '#ffaa55';
-    this.ctx.fillText('PLAYING WITH FIRE', 0, 0);
+    // Draw bouncing characters
+    this.drawMenuCharacters(time, playerCount, isSinglePlayer);
 
-    this.ctx.shadowBlur = 10;
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.font = 'bold 64px Arial';
-    this.ctx.fillText('PLAYING WITH FIRE', 0, 0);
+    // Animated title with bouncy letters
+    this.drawBouncyTitle(time);
 
-    this.ctx.restore();
-    this.ctx.shadowBlur = 0;
+    // Mode selection panel
+    this.drawMenuPanel(time, playerCount, isSinglePlayer, aiDifficulty);
 
-    // Subtitle with glow
-    this.ctx.shadowColor = 'rgba(255, 255, 255, 0.5)';
-    this.ctx.shadowBlur = 15;
-    this.ctx.fillStyle = '#dddddd';
-    this.ctx.font = '28px Arial';
-    this.ctx.textAlign = 'center';
-    this.ctx.fillText('A Bomberman Clone', CANVAS_WIDTH / 2, 160);
-    this.ctx.shadowBlur = 0;
-
-    // Mode selection
-    this.ctx.shadowColor = 'rgba(255, 255, 255, 0.4)';
-    this.ctx.shadowBlur = 10;
+    // Start instruction with bouncy animation
+    const bounceY = Math.sin(time / 300) * 5;
+    const instructionPulse = 0.8 + Math.sin(time / 400) * 0.2;
+    this.ctx.shadowColor = `rgba(255, 200, 100, ${instructionPulse})`;
+    this.ctx.shadowBlur = 25;
     this.ctx.font = 'bold 28px Arial';
     this.ctx.fillStyle = '#ffffff';
-    this.ctx.fillText('Game Mode:', CANVAS_WIDTH / 2, 220);
+    this.ctx.textAlign = 'center';
+    this.ctx.fillText('Press SPACE to start', CANVAS_WIDTH / 2, 540 + bounceY);
     this.ctx.shadowBlur = 0;
+
+    // Controls at bottom
+    this.drawMenuControls(isSinglePlayer, playerCount);
+
+    this.ctx.restore();
+  }
+
+  private drawMenuBackground(time: number): void {
+    const ctx = this.ctx;
+
+    // Draw decorative grid pattern (subtle)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < CANVAS_WIDTH; x += TILE_SIZE) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, CANVAS_HEIGHT);
+      ctx.stroke();
+    }
+    for (let y = 0; y < CANVAS_HEIGHT; y += TILE_SIZE) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(CANVAS_WIDTH, y);
+      ctx.stroke();
+    }
+
+    // Floating particles
+    for (let i = 0; i < 20; i++) {
+      const x = ((time / 50 + i * 100) % (CANVAS_WIDTH + 100)) - 50;
+      const y = (Math.sin(time / 1000 + i * 0.5) * 50) + (i * 30) % CANVAS_HEIGHT;
+      const size = 2 + Math.sin(time / 500 + i) * 1;
+      const alpha = 0.3 + Math.sin(time / 300 + i * 0.7) * 0.2;
+
+      ctx.fillStyle = `rgba(255, 150, 50, ${alpha})`;
+      ctx.beginPath();
+      ctx.arc(x, y, size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  private drawFloatingBombs(time: number): void {
+    const ctx = this.ctx;
+    const bombs = [
+      { x: 80, y: 150, size: 20, speed: 1.2, phase: 0 },
+      { x: CANVAS_WIDTH - 80, y: 180, size: 22, speed: 1.0, phase: 1 },
+      { x: 120, y: 450, size: 18, speed: 1.4, phase: 2 },
+      { x: CANVAS_WIDTH - 100, y: 480, size: 16, speed: 1.1, phase: 3 },
+      { x: 60, y: 320, size: 14, speed: 0.9, phase: 4 },
+      { x: CANVAS_WIDTH - 60, y: 350, size: 15, speed: 1.3, phase: 5 },
+    ];
+
+    bombs.forEach(bomb => {
+      const floatY = Math.sin(time / 600 * bomb.speed + bomb.phase) * 15;
+      const rotate = Math.sin(time / 800 + bomb.phase) * 0.2;
+      const pulse = 1 + Math.sin(time / 400 + bomb.phase) * 0.1;
+
+      ctx.save();
+      ctx.translate(bomb.x, bomb.y + floatY);
+      ctx.rotate(rotate);
+      ctx.scale(pulse, pulse);
+
+      // Bomb glow
+      ctx.shadowColor = '#ff6b35';
+      ctx.shadowBlur = 20;
+
+      // Bomb body
+      ctx.fillStyle = '#2c2c2c';
+      ctx.beginPath();
+      ctx.arc(0, 0, bomb.size, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Bomb highlight
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+      ctx.beginPath();
+      ctx.arc(-bomb.size * 0.3, -bomb.size * 0.3, bomb.size * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Fuse
+      ctx.strokeStyle = '#8B4513';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(0, -bomb.size);
+      ctx.quadraticCurveTo(bomb.size * 0.5, -bomb.size * 1.3, bomb.size * 0.3, -bomb.size * 1.5);
+      ctx.stroke();
+
+      // Fuse spark
+      const sparkFlicker = Math.sin(time / 50 + bomb.phase * 10) > 0;
+      if (sparkFlicker) {
+        ctx.fillStyle = '#ffaa00';
+        ctx.beginPath();
+        ctx.arc(bomb.size * 0.3, -bomb.size * 1.5, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(bomb.size * 0.3, -bomb.size * 1.5, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.shadowBlur = 0;
+      ctx.restore();
+    });
+  }
+
+  private drawMenuCharacters(time: number, playerCount: number, isSinglePlayer: boolean): void {
+    const ctx = this.ctx;
+    const playerColors = [COLORS.player1, COLORS.player2, COLORS.player3, COLORS.player4];
+    const numPlayers = isSinglePlayer ? 4 : playerCount;
+
+    const positions = [
+      { x: 100, baseY: 280 },
+      { x: CANVAS_WIDTH - 100, baseY: 290 },
+      { x: 130, baseY: 420 },
+      { x: CANVAS_WIDTH - 130, baseY: 410 },
+    ];
+
+    for (let i = 0; i < numPlayers; i++) {
+      const pos = positions[i];
+      const bouncePhase = i * 0.8;
+      const bounceY = Math.abs(Math.sin(time / 400 + bouncePhase)) * 20;
+      const squash = 1 - Math.abs(Math.sin(time / 400 + bouncePhase)) * 0.15;
+      const stretch = 1 + Math.abs(Math.sin(time / 400 + bouncePhase)) * 0.1;
+
+      const y = pos.baseY - bounceY;
+
+      ctx.save();
+      ctx.translate(pos.x, y);
+      ctx.scale(squash, stretch);
+
+      this.drawMenuCharacter(ctx, 0, 0, playerColors[i], time, i);
+
+      ctx.restore();
+    }
+  }
+
+  private drawMenuCharacter(ctx: CanvasRenderingContext2D, x: number, y: number, color: string, time: number, index: number): void {
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Shadow
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.beginPath();
+    ctx.ellipse(0, 25, 18, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Body glow
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 20;
+
+    // Body
+    const bodyGradient = ctx.createRadialGradient(-5, -8, 2, 0, 0, 22);
+    bodyGradient.addColorStop(0, this.lightenColor(color, 40));
+    bodyGradient.addColorStop(0.5, color);
+    bodyGradient.addColorStop(1, this.darkenColor(color, 30));
+    ctx.fillStyle = bodyGradient;
+    ctx.beginPath();
+    ctx.arc(0, 0, 20, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.shadowBlur = 0;
+
+    // Body outline
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Highlight
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.beginPath();
+    ctx.ellipse(-6, -10, 8, 5, -0.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Eyes
+    const blinkPhase = Math.floor(time / 3000 + index) % 4 === 0 && (time % 3000) < 150;
+    const eyeY = -4;
+
+    if (blinkPhase) {
+      // Blink - closed eyes
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-8, eyeY);
+      ctx.lineTo(-2, eyeY);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(2, eyeY);
+      ctx.lineTo(8, eyeY);
+      ctx.stroke();
+    } else {
+      // Open eyes
+      [-5, 5].forEach(ex => {
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(ex, eyeY, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Pupil - looking around
+        const lookX = Math.sin(time / 1000 + index) * 1.5;
+        const lookY = Math.cos(time / 800 + index) * 1;
+        ctx.fillStyle = '#000000';
+        ctx.beginPath();
+        ctx.arc(ex + lookX, eyeY + lookY, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    // Feet
+    const footOffset = Math.sin(time / 200 + index) * 3;
+    ctx.fillStyle = color;
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+
+    ctx.beginPath();
+    ctx.ellipse(-9, 18 + footOffset, 6, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.ellipse(9, 18 - footOffset, 6, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Hands waving
+    const waveAngle = Math.sin(time / 300 + index * 2) * 0.5;
+    ctx.save();
+    ctx.translate(-18, -5);
+    ctx.rotate(-0.5 + waveAngle);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(0, 0, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(18, -5);
+    ctx.rotate(0.5 - waveAngle);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(0, 0, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.restore();
+  }
+
+  private drawBouncyTitle(time: number): void {
+    const ctx = this.ctx;
+    const title = 'BOMB BATTLES';
+    const baseY = 80;
+
+    ctx.font = 'bold 62px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // Measure for centering
+    const totalWidth = ctx.measureText(title).width;
+    let currentX = CANVAS_WIDTH / 2 - totalWidth / 2;
+
+    // Draw each letter with individual bounce
+    for (let i = 0; i < title.length; i++) {
+      const char = title[i];
+      const charWidth = ctx.measureText(char).width;
+      const bounceOffset = Math.sin(time / 200 + i * 0.3) * 6;
+      const rotateOffset = Math.sin(time / 300 + i * 0.4) * 0.05;
+
+      ctx.save();
+      ctx.translate(currentX + charWidth / 2, baseY + bounceOffset);
+      ctx.rotate(rotateOffset);
+
+      // Glow layers
+      ctx.shadowColor = '#ff6b35';
+      ctx.shadowBlur = 30;
+      ctx.fillStyle = '#ff6b35';
+      ctx.fillText(char, 0, 0);
+
+      ctx.shadowBlur = 15;
+      ctx.fillStyle = '#ffaa55';
+      ctx.fillText(char, 0, 0);
+
+      ctx.shadowBlur = 5;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(char, 0, 0);
+
+      ctx.restore();
+
+      currentX += charWidth;
+    }
+  }
+
+  private drawMenuPanel(time: number, playerCount: number, isSinglePlayer: boolean, aiDifficulty: 'easy' | 'medium' | 'hard'): void {
+    const ctx = this.ctx;
+    const panelX = CANVAS_WIDTH / 2 - 200;
+    const panelY = 170;
+    const panelWidth = 400;
+    const panelHeight = 340;
+
+    // Panel background with glass effect
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+    ctx.beginPath();
+    ctx.roundRect(panelX, panelY, panelWidth, panelHeight, 20);
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Inner glow
+    ctx.strokeStyle = 'rgba(255, 150, 50, 0.1)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.roundRect(panelX + 4, panelY + 4, panelWidth - 8, panelHeight - 8, 16);
+    ctx.stroke();
+
+    // Mode selection header
+    ctx.font = 'bold 24px Arial';
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.fillText('Game Mode', CANVAS_WIDTH / 2, panelY + 40);
 
     // Mode buttons
-    const modeY = 270;
-    const modeSpacing = 180;
-    const modeStartX = CANVAS_WIDTH / 2 - modeSpacing / 2;
+    const modeY = panelY + 90;
+    this.drawMenuButton(ctx, CANVAS_WIDTH / 2 - 100, modeY, 90, 45, 'Single', 'S', isSinglePlayer, time, 0);
+    this.drawMenuButton(ctx, CANVAS_WIDTH / 2 + 10, modeY, 90, 45, 'Multi', 'M', !isSinglePlayer, time, 1);
 
-    // Single Player button with glow
-    if (isSinglePlayer) {
-      this.ctx.shadowColor = '#ff6b35';
-      this.ctx.shadowBlur = 25;
-    }
-    this.ctx.fillStyle = isSinglePlayer ? '#ff6b35' : '#444444';
-    this.ctx.fillRect(modeStartX - 90, modeY - 25, 160, 50);
-    this.ctx.shadowBlur = 0;
+    // Options section
+    const optionsY = panelY + 160;
 
     if (isSinglePlayer) {
-      this.ctx.strokeStyle = '#ffffff';
-      this.ctx.lineWidth = 3;
-      this.ctx.strokeRect(modeStartX - 90, modeY - 25, 160, 50);
-      // Inner highlight
-      this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-      this.ctx.lineWidth = 2;
-      this.ctx.strokeRect(modeStartX - 87, modeY - 22, 154, 44);
-    }
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.font = 'bold 20px Arial';
-    this.ctx.fillText('Single (S)', modeStartX - 10, modeY + 7);
+      ctx.font = 'bold 20px Arial';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText('AI Difficulty', CANVAS_WIDTH / 2, optionsY);
 
-    // Multiplayer button with glow
-    if (!isSinglePlayer) {
-      this.ctx.shadowColor = '#ff6b35';
-      this.ctx.shadowBlur = 25;
-    }
-    this.ctx.fillStyle = !isSinglePlayer ? '#ff6b35' : '#444444';
-    this.ctx.fillRect(modeStartX + 70, modeY - 25, 160, 50);
-    this.ctx.shadowBlur = 0;
-
-    if (!isSinglePlayer) {
-      this.ctx.strokeStyle = '#ffffff';
-      this.ctx.lineWidth = 3;
-      this.ctx.strokeRect(modeStartX + 70, modeY - 25, 160, 50);
-      // Inner highlight
-      this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-      this.ctx.lineWidth = 2;
-      this.ctx.strokeRect(modeStartX + 73, modeY - 22, 154, 44);
-    }
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.fillText('Multi (M)', modeStartX + 150, modeY + 7);
-
-    // Single player specific options
-    if (isSinglePlayer) {
-      // AI Difficulty selector
-      this.ctx.font = 'bold 20px Arial';
-      this.ctx.fillStyle = '#ffffff';
-      this.ctx.fillText('AI Difficulty:', CANVAS_WIDTH / 2, 320);
-
-      const difficultyY = 355;
       const difficulties: ('easy' | 'medium' | 'hard')[] = ['easy', 'medium', 'hard'];
-      const diffSpacing = 140;
-      const diffStartX = CANVAS_WIDTH / 2 - diffSpacing;
+      const diffLabels = ['Easy', 'Medium', 'Hard'];
+      const diffY = optionsY + 45;
+      const spacing = 110;
+      const startX = CANVAS_WIDTH / 2 - spacing;
 
-      for (let i = 0; i < difficulties.length; i++) {
-        const diff = difficulties[i];
-        const x = diffStartX + i * diffSpacing;
-        const isSelected = aiDifficulty === diff;
-
-        // Button background
-        this.ctx.fillStyle = isSelected ? '#ff6b35' : '#444444';
-        this.ctx.fillRect(x - 50, difficultyY - 15, 100, 35);
-
-        // Button border
-        if (isSelected) {
-          this.ctx.strokeStyle = '#ffffff';
-          this.ctx.lineWidth = 3;
-          this.ctx.strokeRect(x - 50, difficultyY - 15, 100, 35);
-        }
-
-        // Label
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.font = '16px Arial';
-        const label = diff.charAt(0).toUpperCase() + diff.slice(1) + ` (${i + 1})`;
-        this.ctx.fillText(label, x, difficultyY + 5);
+      for (let i = 0; i < 3; i++) {
+        const isSelected = aiDifficulty === difficulties[i];
+        this.drawMenuButton(ctx, startX + i * spacing - 45, diffY, 90, 38, diffLabels[i], String(i + 1), isSelected, time, i + 2);
       }
     } else {
-      // Player count selector (multiplayer only)
-      this.ctx.font = 'bold 24px Arial';
-      this.ctx.fillStyle = '#ffffff';
-      this.ctx.fillText('Players:', CANVAS_WIDTH / 2, 320);
+      ctx.font = 'bold 20px Arial';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText('Players', CANVAS_WIDTH / 2, optionsY);
 
-      // Player count buttons
-      const buttonY = 355;
-      const buttonSpacing = 80;
-      const startX = CANVAS_WIDTH / 2 - buttonSpacing * 1.5;
+      const buttonY = optionsY + 50;
+      const spacing = 70;
+      const startX = CANVAS_WIDTH / 2 - spacing;
 
       for (let i = 2; i <= 4; i++) {
-        const x = startX + (i - 2) * buttonSpacing;
         const isSelected = playerCount === i;
+        const bounce = isSelected ? Math.sin(time / 200 + i) * 3 : 0;
 
-        // Button background
-        this.ctx.fillStyle = isSelected ? '#ff6b35' : '#444444';
-        this.ctx.beginPath();
-        this.ctx.arc(x, buttonY, 25, 0, Math.PI * 2);
-        this.ctx.fill();
+        ctx.save();
+        ctx.translate(startX + (i - 2) * spacing, buttonY + bounce);
 
-        // Button border
+        // Button circle
         if (isSelected) {
-          this.ctx.strokeStyle = '#ffffff';
-          this.ctx.lineWidth = 3;
-          this.ctx.stroke();
+          ctx.shadowColor = '#ff6b35';
+          ctx.shadowBlur = 20;
+        }
+        ctx.fillStyle = isSelected ? '#ff6b35' : 'rgba(255, 255, 255, 0.15)';
+        ctx.beginPath();
+        ctx.arc(0, 0, 28, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (isSelected) {
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 3;
+          ctx.stroke();
         }
 
-        // Number
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.font = 'bold 24px Arial';
-        this.ctx.fillText(i.toString(), x, buttonY + 8);
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 24px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(i), 0, 0);
+
+        ctx.restore();
       }
     }
 
-    // Start instruction with pulsing glow
-    const instructionPulse = 0.7 + Math.sin(Date.now() / 400) * 0.3;
-    this.ctx.shadowColor = `rgba(255, 255, 255, ${instructionPulse})`;
-    this.ctx.shadowBlur = 20;
-    this.ctx.font = 'bold 26px Arial';
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.textAlign = 'center';
-    this.ctx.fillText('Press SPACE to start', CANVAS_WIDTH / 2, 450);
-    this.ctx.shadowBlur = 0;
-
-    // Controls
-    this.ctx.font = '13px Arial';
-    this.ctx.textAlign = 'left';
-    const controlsX = 100;
-    let y = 480;
-
+    // Player indicators (colored dots showing who's playing)
+    const indicatorY = panelY + panelHeight - 50;
+    const indicatorSpacing = 30;
+    const indicatorStartX = CANVAS_WIDTH / 2 - ((isSinglePlayer ? 4 : playerCount) - 1) * indicatorSpacing / 2;
     const playerColors = [COLORS.player1, COLORS.player2, COLORS.player3, COLORS.player4];
 
+    ctx.font = '14px Arial';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+    ctx.textAlign = 'center';
+    ctx.fillText('Players:', CANVAS_WIDTH / 2, indicatorY - 20);
+
+    const numIndicators = isSinglePlayer ? 4 : playerCount;
+    for (let i = 0; i < numIndicators; i++) {
+      const pulse = 1 + Math.sin(time / 300 + i * 0.5) * 0.15;
+      const x = indicatorStartX + i * indicatorSpacing;
+
+      ctx.save();
+      ctx.translate(x, indicatorY);
+      ctx.scale(pulse, pulse);
+
+      ctx.shadowColor = playerColors[i];
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = playerColors[i];
+      ctx.beginPath();
+      ctx.arc(0, 0, 8, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      if (isSinglePlayer && i > 0) {
+        // AI badge
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.font = 'bold 8px Arial';
+        ctx.fillText('AI', 0, 1);
+      }
+
+      ctx.restore();
+    }
+  }
+
+  private drawMenuButton(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, label: string, key: string, isSelected: boolean, time: number, index: number): void {
+    const bounce = isSelected ? Math.sin(time / 200 + index) * 2 : 0;
+
+    ctx.save();
+    ctx.translate(x + width / 2, y + height / 2 + bounce);
+
+    // Button background
+    if (isSelected) {
+      ctx.shadowColor = '#ff6b35';
+      ctx.shadowBlur = 20;
+    }
+
+    ctx.fillStyle = isSelected ? '#ff6b35' : 'rgba(255, 255, 255, 0.1)';
+    ctx.beginPath();
+    ctx.roundRect(-width / 2, -height / 2, width, height, 10);
+    ctx.fill();
+
+    if (isSelected) {
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    ctx.shadowBlur = 0;
+
+    // Label
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 18px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, 0, -5);
+
+    // Key hint
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.font = '12px Arial';
+    ctx.fillText(`(${key})`, 0, 12);
+
+    ctx.restore();
+  }
+
+  private drawMenuControls(isSinglePlayer: boolean, playerCount: number): void {
+    const ctx = this.ctx;
+    const playerColors = [COLORS.player1, COLORS.player2, COLORS.player3, COLORS.player4];
+
+    ctx.font = '12px Arial';
+    ctx.textAlign = 'left';
+    const controlsX = 50;
+    let y = 590;
+
     if (isSinglePlayer) {
-      // Show only player 1 controls
-      this.ctx.fillStyle = playerColors[0];
-      this.ctx.fillText('You: Arrow Keys + / (bomb)', controlsX, y);
-      y += 20;
-      this.ctx.fillStyle = '#888888';
-      this.ctx.fillText('Opponents: AI-controlled', controlsX, y);
+      ctx.fillStyle = playerColors[0];
+      ctx.fillText('You: Arrow Keys + / (bomb) + . (special)', controlsX, y);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+      ctx.fillText('  |  Opponents: AI-controlled', controlsX + 280, y);
     } else {
-      // Show all player controls
       const controls = [
-        'Player 1: Arrow Keys + / (bomb)',
-        'Player 2: WASD + Space (bomb)',
-        'Player 3: IJKL + O (bomb)',
-        'Player 4: Numpad 8456 + 0 (bomb)'
+        'P1: Arrows + /',
+        'P2: WASD + Space',
+        'P3: IJKL + O',
+        'P4: Numpad'
       ];
 
-      for (let i = 0; i < 4; i++) {
-        const isActive = i < playerCount;
-        this.ctx.fillStyle = isActive ? playerColors[i] : '#444444';
-        this.ctx.fillText(controls[i], controlsX, y);
-        y += 20;
+      let currentX = controlsX;
+      for (let i = 0; i < playerCount; i++) {
+        ctx.fillStyle = playerColors[i];
+        ctx.fillText(controls[i], currentX, y);
+        currentX += ctx.measureText(controls[i]).width + 20;
       }
     }
-    this.ctx.restore();
+  }
+
+  private lightenColor(color: string, amount: number): string {
+    const hex = color.replace('#', '');
+    const r = Math.min(255, parseInt(hex.substr(0, 2), 16) + amount);
+    const g = Math.min(255, parseInt(hex.substr(2, 2), 16) + amount);
+    const b = Math.min(255, parseInt(hex.substr(4, 2), 16) + amount);
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+
+  private darkenColor(color: string, amount: number): string {
+    const hex = color.replace('#', '');
+    const r = Math.max(0, parseInt(hex.substr(0, 2), 16) - amount);
+    const g = Math.max(0, parseInt(hex.substr(2, 2), 16) - amount);
+    const b = Math.max(0, parseInt(hex.substr(4, 2), 16) - amount);
+    return `rgb(${r}, ${g}, ${b})`;
   }
 
   renderPaused(): void {
