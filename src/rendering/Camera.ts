@@ -3,6 +3,7 @@ export interface ShakeConfig {
   duration: number;   // Seconds
   frequency?: number; // Shakes per second (default 30)
   decay?: boolean;    // Whether intensity decays over time (default true)
+  direction?: { x: number; y: number }; // NEW: Directional shake vector
 }
 
 interface ActiveShake {
@@ -11,6 +12,8 @@ interface ActiveShake {
   elapsed: number;
   frequency: number;
   decay: boolean;
+  directionX: number; // NEW
+  directionY: number; // NEW
 }
 
 export class Camera {
@@ -70,7 +73,9 @@ export class Camera {
       duration: config.duration,
       elapsed: 0,
       frequency: config.frequency ?? 30,
-      decay: config.decay ?? true
+      decay: config.decay ?? true,
+      directionX: config.direction?.x ?? 0,
+      directionY: config.direction?.y ?? 0
     });
   }
 
@@ -113,8 +118,22 @@ export class Camera {
 
       // Calculate shake offset using sine waves at the specified frequency
       const time = shake.elapsed * shake.frequency * Math.PI * 2;
-      const shakeX = Math.sin(time) * currentIntensity;
-      const shakeY = Math.sin(time * 1.3 + 0.5) * currentIntensity;
+      let shakeX: number;
+      let shakeY: number;
+
+      if (shake.directionX !== 0 || shake.directionY !== 0) {
+        // Directional shake: move only along the normalized direction vector
+        const mag = Math.sqrt(shake.directionX * shake.directionX + shake.directionY * shake.directionY);
+        const dx = shake.directionX / mag;
+        const dy = shake.directionY / mag;
+        const offset = Math.sin(time) * currentIntensity;
+        shakeX = dx * offset;
+        shakeY = dy * offset;
+      } else {
+        // Standard random-ish 2D shake
+        shakeX = Math.sin(time) * currentIntensity;
+        shakeY = Math.sin(time * 1.3 + 0.5) * currentIntensity;
+      }
 
       // Add some random jitter for more organic feel
       const jitter = currentIntensity * 0.3;

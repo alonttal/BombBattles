@@ -35,6 +35,10 @@ export class Renderer {
   private colorOverlayAlpha: number = 0;
   private colorOverlayDuration: number = 0;
   private colorOverlayTimer: number = 0;
+  private hitStopTimer: number = 0;
+  private hudAnimationTimer: number = 0;
+  private lastScores: number[] = [0, 0, 0, 0];
+  private cardScorePulse: number[] = [0, 0, 0, 0];
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -44,6 +48,8 @@ export class Renderer {
 
     // Setup lighting canvas
     this.lightingCanvas = document.createElement('canvas');
+    this.lightingCanvas.width = CANVAS_WIDTH;
+    this.lightingCanvas.height = CANVAS_HEIGHT;
     this.lightingCtx = this.lightingCanvas.getContext('2d')!;
 
     // Set initial canvas size
@@ -117,8 +123,21 @@ export class Renderer {
   }
 
   update(deltaTime: number): void {
+    if (this.hitStopTimer > 0) {
+      this.hitStopTimer -= deltaTime;
+      return;
+    }
+
+    this.hudAnimationTimer += deltaTime;
     this.particleSystem.update(deltaTime);
     this.camera.update(deltaTime);
+
+    // Update card pulses
+    for (let i = 0; i < 4; i++) {
+      if (this.cardScorePulse[i] > 0) {
+        this.cardScorePulse[i] -= deltaTime;
+      }
+    }
 
     // Update color overlay
     if (this.colorOverlay) {
@@ -131,6 +150,14 @@ export class Renderer {
         this.colorOverlayAlpha = 1 - (this.colorOverlayTimer / this.colorOverlayDuration);
       }
     }
+  }
+
+  freeze(duration: number): void {
+    this.hitStopTimer = duration;
+  }
+
+  isFrozen(): boolean {
+    return this.hitStopTimer > 0;
   }
 
   triggerColorFlash(color: string, duration: number): void {
@@ -207,8 +234,8 @@ export class Renderer {
       text.render(this.ctx);
     }
 
-    // Draw lighting overlay (Disabled temporarily to debug grey screen issue)
-    // this.renderLighting(state);
+    // Draw lighting overlay (Re-enabled with fix)
+    this.renderLighting(state);
 
     // Restore camera transform
     this.ctx.restore();
@@ -343,8 +370,11 @@ export class Renderer {
     this.ctx.textAlign = 'center';
     this.ctx.textBaseline = 'middle';
 
-    // Warning Glow
+    // Warning Glow & Wobble
     if (roundTime <= 30) {
+      const wobble = Math.sin(this.hudAnimationTimer * 20) * 1.5;
+      this.ctx.save();
+      this.ctx.translate(wobble, 0);
       this.ctx.shadowColor = '#ff2222';
       this.ctx.shadowBlur = 15;
       this.ctx.fillStyle = '#ff5555';
@@ -354,6 +384,9 @@ export class Renderer {
     }
     this.ctx.fillText(timeText, centerX, timerY + timerHeight / 2 - 2);
     this.ctx.shadowBlur = 0;
+    if (roundTime <= 30) {
+      this.ctx.restore();
+    }
 
     // Progress Bar (Bottom of Timer)
     const totalTime = 180; // Assuming 3 mins default round
@@ -387,7 +420,22 @@ export class Renderer {
   }
 
   private drawPlayerCard(x: number, y: number, player: Player, index: number, isAlive: boolean, scoreManager?: ScoreManager): void {
+    const score = scoreManager ? scoreManager.getScore(index) : 0;
+    if (score !== this.lastScores[index]) {
+      this.cardScorePulse[index] = 0.5; // Trigger pulse for 0.5s
+      this.lastScores[index] = score;
+    }
+
+    const pulse = Math.sin(this.hudAnimationTimer * 3) * 0.015;
+    const scorePulse = this.cardScorePulse[index] > 0 ? Math.sin((this.cardScorePulse[index] / 0.5) * Math.PI) * 0.1 : 0;
+    const scale = 1 + pulse + scorePulse;
+
     const ctx = this.ctx;
+    ctx.save();
+    ctx.translate(x + this.CARD_WIDTH / 2, y + this.CARD_HEIGHT / 2);
+    ctx.scale(scale, scale);
+    ctx.translate(-this.CARD_WIDTH / 2, -this.CARD_HEIGHT / 2);
+
     const colors = [COLORS.player1, COLORS.player2, COLORS.player3, COLORS.player4];
     const playerColor = colors[index];
     const borderColor = isAlive ? playerColor : '#555555';
@@ -474,12 +522,16 @@ export class Renderer {
       ctx.fillStyle = '#ffaa00';
       ctx.fillText(`${player.bombRange}`, contentX + 45, statsY);
 
-      // Ability indicator (small dot if any ability)
-      if (player.hasAbility('kick') || player.hasAbility('punch') || player.hasShield() || player.teleportCharges > 0) {
-        ctx.fillStyle = '#00ffff';
-        ctx.beginPath();
-        ctx.arc(contentX + 65, statsY, 3, 0, Math.PI * 2);
-        ctx.fill();
+      // Ability indicator (Improved with actual icons)
+      const abilityX = contentX + 65;
+      if (player.hasShield()) {
+        this.drawAbilityIcon(abilityX, statsY, 'shield');
+      } else if (player.canTeleport()) {
+        this.drawAbilityIcon(abilityX, statsY, 'teleport');
+      } else if (player.hasAbility('kick')) {
+        this.drawAbilityIcon(abilityX, statsY, 'kick');
+      } else if (player.hasAbility('punch')) {
+        this.drawAbilityIcon(abilityX, statsY, 'punch');
       }
     } else {
       // Dead State
@@ -489,23 +541,10 @@ export class Renderer {
       ctx.textBaseline = 'middle';
       ctx.fillText("OUT", contentX + contentWidth / 2, y + this.CARD_HEIGHT / 2);
     }
+    ctx.restore();
   }
 
-  private drawStatText(text: string, x: number, y: number) {
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.font = 'bold 11px Arial';
-    this.ctx.textAlign = 'left';
-    this.ctx.textBaseline = 'middle';
-    this.ctx.fillText(text, x, y);
-  }
 
-  private drawStatIcon(x: number, y: number, type: 'bomb' | 'blast', bombType: BombType) {
-    if (type === 'bomb') {
-      this.drawBombIcon(x, y, 6, bombType);
-    } else {
-      this.drawBlastIcon(x, y, 6);
-    }
-  }
 
   private drawAvatar(x: number, y: number, radius: number, color: string, isAlive: boolean, isWinner: boolean): void {
     const ctx = this.ctx;
@@ -665,13 +704,6 @@ export class Renderer {
     ctx.fill();
     ctx.restore();
   }
-
-  // Keep drawFireIcon for compatibility if used elsewhere, or just rename/replace logic if I can find usage.
-  // Actually, I'm replacing the method in the class.
-  private drawFireIcon(x: number, y: number, size: number): void {
-    this.drawBlastIcon(x, y, size);
-  }
-
 
   private drawAbilityIcon(x: number, y: number, type: 'kick' | 'punch' | 'shield' | 'teleport'): void {
     const ctx = this.ctx;
@@ -847,8 +879,18 @@ export class Renderer {
   private drawMenuBackground(time: number): void {
     const ctx = this.ctx;
 
-    // Draw decorative grid pattern (subtle)
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+    // 1. Base Gradient
+    const bgGradient = ctx.createRadialGradient(
+      CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, 0,
+      CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, CANVAS_WIDTH * 0.8
+    );
+    bgGradient.addColorStop(0, '#1a1a1a');
+    bgGradient.addColorStop(1, '#050505');
+    ctx.fillStyle = bgGradient;
+    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+    // 2. Decorative grid pattern (subtle)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
     ctx.lineWidth = 1;
     for (let x = 0; x < CANVAS_WIDTH; x += TILE_SIZE) {
       ctx.beginPath();
@@ -863,18 +905,45 @@ export class Renderer {
       ctx.stroke();
     }
 
-    // Floating particles
-    for (let i = 0; i < 20; i++) {
-      const x = ((time / 50 + i * 100) % (CANVAS_WIDTH + 100)) - 50;
-      const y = (Math.sin(time / 1000 + i * 0.5) * 50) + (i * 30) % CANVAS_HEIGHT;
-      const size = 2 + Math.sin(time / 500 + i) * 1;
-      const alpha = 0.3 + Math.sin(time / 300 + i * 0.7) * 0.2;
+    // 3. Floating particles (enhanced)
+    for (let i = 0; i < 30; i++) {
+      const x = ((time / 60 + i * 120) % (CANVAS_WIDTH + 100)) - 50;
+      const y = (Math.sin(time / 1200 + i * 0.7) * 40) + (i * 25) % CANVAS_HEIGHT;
+      const size = 1.5 + Math.sin(time / 600 + i) * 1;
+      const alpha = 0.2 + Math.sin(time / 400 + i * 0.8) * 0.15;
 
-      ctx.fillStyle = `rgba(255, 150, 50, ${alpha})`;
+      ctx.fillStyle = `rgba(255, 180, 80, ${alpha})`;
       ctx.beginPath();
       ctx.arc(x, y, size, 0, Math.PI * 2);
       ctx.fill();
+
+      // Subtle glow for some particles
+      if (i % 5 === 0) {
+        ctx.shadowColor = '#ff9632';
+        ctx.shadowBlur = 8;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
     }
+
+    // 4. Subtle Scanlines
+    ctx.save();
+    ctx.globalAlpha = 0.05;
+    ctx.fillStyle = '#000000';
+    for (let y = 0; y < CANVAS_HEIGHT; y += 4) {
+      ctx.fillRect(0, y, CANVAS_WIDTH, 2);
+    }
+    ctx.restore();
+
+    // 5. Vignette Effect
+    const vignette = ctx.createRadialGradient(
+      CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, CANVAS_WIDTH * 0.4,
+      CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, CANVAS_WIDTH * 0.8
+    );
+    vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    vignette.addColorStop(1, 'rgba(0, 0, 0, 0.6)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
   }
 
   private drawFloatingBombs(time: number): void {

@@ -46,6 +46,9 @@ export class Player extends Entity {
   private nextBlinkTime: number = Math.random() * 3 + 2;
   private squashX: number = 1;
   private squashY: number = 1;
+  private targetSquashX: number = 1;
+  private targetSquashY: number = 1;
+  private hitFlashTimer: number = 0;
 
   // Punch animation
   private isPunching: boolean = false;
@@ -118,43 +121,61 @@ export class Player extends Entity {
       this.pushbackSquashTimer -= deltaTime;
     }
 
-    // Animation
+    // --- Juicy Animation Logic ---
+    let baseSquashX = 1;
+    let baseSquashY = 1;
+
     if (this.isMoving) {
       this.animationTimer += deltaTime;
-      if (this.animationTimer >= 0.1) {
+      const stepDuration = 0.1;
+      if (this.animationTimer >= stepDuration) {
         this.animationTimer = 0;
         this.animationFrame = (this.animationFrame + 1) % 4;
-
-        // Emit footstep event on specific frames (e.g., 0 and 2 are contact points?)
         if (this.animationFrame === 0 || this.animationFrame === 2) {
           EventBus.emit('player-step', { player: this });
         }
       }
 
-      // Check for speed trail
-      if (this.speed > DEFAULT_PLAYER_SPEED) {
-        if (Math.random() < 0.3) {
-          EventBus.emit('player-trail', { player: this });
-        }
+      // Continuous movement wobble
+      const wobbleAmount = 0.08 + (this.speed / MAX_SPEED) * 0.05;
+      const wobble = Math.sin(performance.now() * 0.015) * wobbleAmount;
+      baseSquashX = 1 + wobble;
+      baseSquashY = 1 - wobble;
+
+      // Speed trail
+      if (this.speed > DEFAULT_PLAYER_SPEED && Math.random() < 0.3) {
+        EventBus.emit('player-trail', { player: this });
       }
-
-      // Bounce effect (Squash & Stretch)
-      this.squashX = 1 + Math.sin(this.animationFrame * Math.PI) * 0.1;
-      this.squashY = 1 - Math.sin(this.animationFrame * Math.PI) * 0.1;
-
     } else {
       this.animationFrame = 0;
-      // Recover to normal shape
-      this.squashX += (1 - this.squashX) * deltaTime * 10;
-      this.squashY += (1 - this.squashY) * deltaTime * 10;
+      // Idle breathing
+      const breatheSpeed = 0.003;
+      const breatheAmount = 0.03;
+      const breathe = Math.sin(performance.now() * breatheSpeed) * breatheAmount;
+      baseSquashX = 1 + breathe;
+      baseSquashY = 1 - breathe;
     }
 
-    // Apply pushback squash effect (bouncy impact feel)
+    this.targetSquashX = baseSquashX;
+    this.targetSquashY = baseSquashY;
+
+    // Apply pushback squash (overrides base)
     if (this.pushbackSquashTimer > 0) {
-      const squashIntensity = this.pushbackSquashTimer / 0.15; // 0.15s is the squash duration
-      const squashAmount = Math.sin(squashIntensity * Math.PI) * 0.25;
-      this.squashX = 1 + squashAmount;
-      this.squashY = 1 - squashAmount * 0.5;
+      this.pushbackSquashTimer -= deltaTime;
+      const t = this.pushbackSquashTimer / 0.15;
+      const squash = Math.sin(t * Math.PI) * 0.3;
+      this.targetSquashX = 1 + squash;
+      this.targetSquashY = 1 - squash * 0.5;
+    }
+
+    // Lerp towards target squash
+    const squashLerpSpeed = 15;
+    this.squashX += (this.targetSquashX - this.squashX) * deltaTime * squashLerpSpeed;
+    this.squashY += (this.targetSquashY - this.squashY) * deltaTime * squashLerpSpeed;
+
+    // Update Hit Flash
+    if (this.hitFlashTimer > 0) {
+      this.hitFlashTimer -= deltaTime;
     }
 
     // Blinking
@@ -306,6 +327,15 @@ export class Player extends Entity {
 
     // Draw player
     this.drawPlayer(ctx, x, y, color);
+
+    // Hit Flash Overlay
+    if (this.hitFlashTimer > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = Math.min(1, this.hitFlashTimer / 0.2) * 0.6;
+      this.drawPlayer(ctx, x, y, '#ffffff'); // Draw purely white version
+      ctx.restore();
+    }
 
     // Shield effect
     if (this.shieldActive) {
@@ -612,6 +642,8 @@ export class Player extends Entity {
   placeBomb(): void {
     if (this.canPlaceBomb()) {
       this.activeBombs++;
+      // Juice: Small squash on place
+      this.triggerSquash(0.2, 0.1);
       EventBus.emit('bomb-placed', {
         gridX: this.position.gridX,
         gridY: this.position.gridY,
@@ -627,6 +659,7 @@ export class Player extends Entity {
   die(): void {
     if (this.shieldActive) {
       this.shieldActive = false;
+      this.hitFlashTimer = 0.3; // White flash on shield break
       EventBus.emit('shield-consumed', { player: this });
       return;
     }
@@ -677,6 +710,7 @@ export class Player extends Entity {
 
   applyDebuff(debuff: string, duration: number): void {
     this.debuffs.set(debuff, duration);
+    this.hitFlashTimer = 0.2; // Feedback for getting debuffed (e.g. skull)
   }
 
   setBombType(type: BombType): void {
@@ -694,8 +728,15 @@ export class Player extends Entity {
       this.teleportProgress = 0;
       this.teleportTarget = { gridX: targetGridX, gridY: targetGridY };
       this.teleportCharges--;
+      // Juice: squash on teleport out
+      this.triggerSquash(0.4, 0.2);
       EventBus.emit('teleport-start', { player: this });
     }
+  }
+
+  triggerSquash(_amount: number, duration: number): void {
+    this.pushbackSquashTimer = duration;
+    // We reuse this logic but can be more specific if needed
   }
 
   canTeleport(): boolean {

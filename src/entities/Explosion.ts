@@ -60,29 +60,45 @@ export class Explosion extends Entity {
 
     // Outer glow
     ctx.shadowColor = colors.outer;
-    ctx.shadowBlur = 15 * scale;
+    ctx.shadowBlur = 20 * scale;
 
     // Draw explosion
     if (tile.direction === 'center') {
-      // Center is a pulsing circle with glow
-      const gradient = ctx.createRadialGradient(
-        x + TILE_SIZE / 2, y + TILE_SIZE / 2, 0,
-        x + TILE_SIZE / 2, y + TILE_SIZE / 2, size / 2 + 4
-      );
-      gradient.addColorStop(0, '#ffffff');
-      gradient.addColorStop(0.2, colors.inner);
-      gradient.addColorStop(0.6, colors.middle);
-      gradient.addColorStop(1, colors.outer);
+      // 1. Shockwave ring (fast expansion)
+      if (progress < 0.4) {
+        ctx.save();
+        const swProgress = progress / 0.4;
+        ctx.strokeStyle = colors.inner;
+        ctx.lineWidth = 3 * (1 - swProgress);
+        ctx.globalAlpha = (1 - swProgress) * 0.4;
+        ctx.beginPath();
+        ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, TILE_SIZE * (0.5 + swProgress * 1.5), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
 
-      ctx.fillStyle = gradient;
+      // 2. Multi-layered pulsing core
+      const coreGradient = ctx.createRadialGradient(
+        x + TILE_SIZE / 2, y + TILE_SIZE / 2, 0,
+        x + TILE_SIZE / 2, y + TILE_SIZE / 2, size / 2 + 6
+      );
+      coreGradient.addColorStop(0, '#ffffff');
+      coreGradient.addColorStop(0.15, colors.inner);
+      coreGradient.addColorStop(0.4, colors.middle);
+      coreGradient.addColorStop(0.7, colors.outer);
+      coreGradient.addColorStop(1, 'transparent');
+
+      ctx.fillStyle = coreGradient;
       ctx.beginPath();
-      ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, size / 2 + 2, 0, Math.PI * 2);
+      ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, size / 2 + 5, 0, Math.PI * 2);
       ctx.fill();
 
-      // Hot core
+      // 3. Hot white center (jittering slightly)
+      const jitterX = (Math.random() - 0.5) * 2;
+      const jitterY = (Math.random() - 0.5) * 2;
       ctx.fillStyle = '#ffffff';
       ctx.beginPath();
-      ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, size * 0.15, 0, Math.PI * 2);
+      ctx.arc(x + TILE_SIZE / 2 + jitterX, y + TILE_SIZE / 2 + jitterY, size * 0.18, 0, Math.PI * 2);
       ctx.fill();
 
     } else {
@@ -93,20 +109,17 @@ export class Explosion extends Entity {
       ctx.beginPath();
 
       if (isHorizontal) {
-        // Horizontal flame with wavy edges
         const flameTop = y + offset - waveOffset;
         const flameBottom = y + TILE_SIZE - offset + waveOffset;
         const flameMid = y + TILE_SIZE / 2;
 
         ctx.moveTo(x, flameMid);
-        // Top edge with waves
         for (let i = 0; i <= TILE_SIZE; i += 8) {
-          const waveY = flameTop + Math.sin((i + progress * 100) * 0.3) * 3;
+          const waveY = flameTop + Math.sin((i + progress * 200) * 0.4) * 4;
           ctx.lineTo(x + i, waveY);
         }
-        // Bottom edge with waves (going back)
         for (let i = TILE_SIZE; i >= 0; i -= 8) {
-          const waveY = flameBottom + Math.sin((i + progress * 100) * 0.3) * 3;
+          const waveY = flameBottom + Math.sin((i + progress * 200) * 0.4) * 4;
           ctx.lineTo(x + i, waveY);
         }
         ctx.closePath();
@@ -121,30 +134,26 @@ export class Explosion extends Entity {
         ctx.fillStyle = gradient;
         ctx.fill();
 
-        // Inner hot core
-        ctx.fillStyle = colors.inner;
-        ctx.fillRect(x, flameMid - size * 0.15, TILE_SIZE, size * 0.3);
+        // Extra "Heat" layer in the middle
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.fillRect(x, flameMid - size * 0.05, TILE_SIZE, size * 0.1);
 
       } else {
-        // Vertical flame with wavy edges
         const flameLeft = x + offset - waveOffset;
         const flameRight = x + TILE_SIZE - offset + waveOffset;
         const flameMid = x + TILE_SIZE / 2;
 
         ctx.moveTo(flameMid, y);
-        // Right edge with waves
         for (let i = 0; i <= TILE_SIZE; i += 8) {
-          const waveX = flameRight + Math.sin((i + progress * 100) * 0.3) * 3;
+          const waveX = flameRight + Math.sin((i + progress * 200) * 0.4) * 4;
           ctx.lineTo(waveX, y + i);
         }
-        // Left edge with waves (going back)
         for (let i = TILE_SIZE; i >= 0; i -= 8) {
-          const waveX = flameLeft + Math.sin((i + progress * 100) * 0.3) * 3;
+          const waveX = flameLeft + Math.sin((i + progress * 200) * 0.4) * 4;
           ctx.lineTo(waveX, y + i);
         }
         ctx.closePath();
 
-        // Gradient fill
         const gradient = ctx.createLinearGradient(flameLeft, y, flameRight, y);
         gradient.addColorStop(0, colors.outer);
         gradient.addColorStop(0.3, colors.middle);
@@ -154,9 +163,9 @@ export class Explosion extends Entity {
         ctx.fillStyle = gradient;
         ctx.fill();
 
-        // Inner hot core
-        ctx.fillStyle = colors.inner;
-        ctx.fillRect(flameMid - size * 0.15, y, size * 0.3, TILE_SIZE);
+        // Extra "Heat" layer in the middle
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.fillRect(flameMid - size * 0.05, y, size * 0.1, TILE_SIZE);
       }
 
       // End cap with glow

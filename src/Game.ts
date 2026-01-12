@@ -7,7 +7,9 @@ import {
   ROUND_TIME,
   COUNTDOWN_TIME,
   POWERUP_SPAWN_CHANCE,
-  COLORS
+  COLORS,
+  CANVAS_WIDTH,
+  CANVAS_HEIGHT
 } from './constants';
 import { GameLoop } from './core/GameLoop';
 import { InputManager } from './core/InputManager';
@@ -23,6 +25,7 @@ import { TileType, MapData, CLASSIC_MAP } from './map/TileTypes';
 import { AIController } from './ai/AIController';
 import { ScoreManager, ScoreEvent } from './core/ScoreManager';
 import { FloatingText } from './rendering/FloatingText';
+import { Camera } from './rendering/Camera';
 
 export class Game {
   private renderer: Renderer;
@@ -98,6 +101,12 @@ export class Game {
   }
 
   private update(deltaTime: number): void {
+    // Check for hit stop (visual freeze frame juice)
+    if (this.renderer.isFrozen()) {
+      this.renderer.update(deltaTime);
+      return;
+    }
+
     switch (this.phase) {
       case GamePhase.MAIN_MENU:
         this.updateMainMenu();
@@ -1041,15 +1050,24 @@ export class Game {
       }
     }
 
+    // Calculate radial direction for more impactful shake ( emanates from explosion)
+    const screenCenterX = CANVAS_WIDTH / 2;
+    const screenCenterY = CANVAS_HEIGHT / 2;
+    const dirX = centerX - screenCenterX;
+    const dirY = centerY - screenCenterY;
+    const shakeDir = (Math.abs(dirX) > 5 || Math.abs(dirY) > 5) ? { x: dirX, y: dirY } : undefined;
+
     // Screen shake - bigger shake for chain reactions and larger explosions
     if (chainReactionCount > 0) {
-      camera.shakePreset('chainReaction');
+      camera.shake({ ...Camera.PRESETS.chainReaction, direction: shakeDir });
       SoundManager.play('explosionBig');
+      this.renderer.freeze(0.12); // Hit stop for chain reactions
     } else if (range >= 4) {
-      camera.shakePreset('bigExplosion');
+      camera.shake({ ...Camera.PRESETS.bigExplosion, direction: shakeDir });
       SoundManager.play('explosionBig');
+      this.renderer.freeze(0.08); // Smaller hit stop for big explosions
     } else {
-      camera.shakePreset('bombExplode');
+      camera.shake({ ...Camera.PRESETS.bombExplode, direction: shakeDir });
       // Play appropriate explosion sound based on bomb type
       if (type === BombType.ICE) {
         SoundManager.play('explosionIce');
@@ -1283,6 +1301,7 @@ export class Game {
     // Screen shake for dramatic effect
     camera.shakePreset('playerDeath');
     this.renderer.triggerColorFlash('#ff0000', 0.5); // Red flash
+    this.renderer.freeze(0.2); // Significant hit stop on death
 
     // Play death sound
     SoundManager.play('playerDeath');
