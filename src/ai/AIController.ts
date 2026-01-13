@@ -3,7 +3,7 @@ import {Block} from '../entities/Block';
 import {Bomb} from '../entities/Bomb';
 import {PowerUp} from '../entities/PowerUp';
 import {Explosion} from '../entities/Explosion';
-import {Direction, GRID_HEIGHT, GRID_WIDTH} from '../constants';
+import {Direction, GRID_HEIGHT, GRID_WIDTH, EXPLOSION_DURATION} from '../constants';
 
 interface DangerCell {
   x: number;
@@ -932,14 +932,19 @@ export class AIController {
       }
     }
 
-    // Mark active explosions
+    // Mark active explosions with their remaining duration
     for (const explosion of explosions) {
       if (!explosion.isActive) continue;
+
+      // Calculate remaining explosion time (how long flames will last)
+      const explosionProgress = explosion.getProgress(); // 0 to 1 (0 = just started, 1 = finished)
+      const remainingTime = 0.05 + EXPLOSION_DURATION * (1 - explosionProgress);
 
       for (const tile of explosion.tiles) {
         const cell = grid[tile.gridY]?.[tile.gridX];
         if (cell) {
-          cell.dangerTime = 0;
+          // Mark as dangerous for the remaining duration of the explosion
+          cell.dangerTime = Math.min(cell.dangerTime, remainingTime);
         }
       }
     }

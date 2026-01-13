@@ -1,5 +1,5 @@
 import { Entity } from './Entity';
-import { Direction, TILE_SIZE, EXPLOSION_DURATION } from '../constants';
+import { Direction, TILE_SIZE, EXPLOSION_DURATION, EXPLOSION_KILL_DURATION } from '../constants';
 import { BombType } from './Player';
 
 export interface ExplosionTile {
@@ -212,5 +212,12 @@ export class Explosion extends Entity {
 
   getProgress(): number {
     return 1 - (this.timer / this.maxTimer);
+  }
+
+  canKill(): boolean {
+    // The explosion can kill for EXPLOSION_KILL_DURATION seconds
+    // Timer counts down from EXPLOSION_DURATION, so elapsed time = EXPLOSION_DURATION - timer
+    const elapsedTime = this.maxTimer - this.timer;
+    return elapsedTime < EXPLOSION_KILL_DURATION;
   }
 }

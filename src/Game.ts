@@ -1074,7 +1074,7 @@ export class Game {
   private checkExplosionCollisions(): void {
     // Check if any alive players are currently on active explosion tiles
     for (const explosion of this.explosions) {
-      if (!explosion.isActive) continue;
+      if (!explosion.isActive || !explosion.canKill()) continue;
 
       for (const tile of explosion.tiles) {
         for (const player of this.players) {
