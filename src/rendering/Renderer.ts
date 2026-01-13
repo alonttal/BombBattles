@@ -40,6 +40,11 @@ export class Renderer {
   private lastScores: number[] = [0, 0, 0, 0];
   private cardScorePulse: number[] = [0, 0, 0, 0];
 
+  // NEW: Animated background elements
+  private clouds: { x: number; y: number; size: number; speed: number }[] = [];
+  private grassWaveTime: number = 0;
+  private windParticleTimer: number = 0;
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d')!;
@@ -58,6 +63,16 @@ export class Renderer {
 
     // Pixel-perfect rendering
     this.ctx.imageSmoothingEnabled = false;
+
+    // NEW: Initialize clouds
+    for (let i = 0; i < 4; i++) {
+      this.clouds.push({
+        x: Math.random() * CANVAS_WIDTH,
+        y: Math.random() * CANVAS_HEIGHT * 0.4, // Top 40% of screen
+        size: 40 + Math.random() * 30,
+        speed: 5 + Math.random() * 10
+      });
+    }
 
     // Setup resize handler
     this.setupResize();
@@ -132,6 +147,30 @@ export class Renderer {
     this.particleSystem.update(deltaTime);
     this.camera.update(deltaTime);
 
+    // NEW: Update clouds (drift slowly to the right)
+    for (const cloud of this.clouds) {
+      cloud.x += cloud.speed * deltaTime;
+      // Wraparound
+      if (cloud.x > CANVAS_WIDTH + cloud.size) {
+        cloud.x = -cloud.size;
+        cloud.y = Math.random() * CANVAS_HEIGHT * 0.4;
+      }
+    }
+
+    // NEW: Update grass wave animation
+    this.grassWaveTime += deltaTime;
+
+    // NEW: Spawn ambient wind particles occasionally
+    this.windParticleTimer += deltaTime;
+    if (this.windParticleTimer > 2.0) { // Every 2 seconds
+      this.windParticleTimer = 0;
+      this.particleSystem.emitPreset(
+        'windParticles',
+        -10, // Start off-screen left
+        Math.random() * CANVAS_HEIGHT
+      );
+    }
+
     // Update card pulses
     for (let i = 0; i < 4; i++) {
       if (this.cardScorePulse[i] > 0) {
@@ -185,6 +224,9 @@ export class Renderer {
     // Apply camera transform
     this.ctx.save();
     this.camera.applyCenteredTransform(this.ctx, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+    // NEW: Draw drifting clouds (behind ground)
+    this.renderClouds();
 
     // Draw ground
     this.renderGround();
@@ -260,6 +302,24 @@ export class Renderer {
     return this.camera;
   }
 
+  // NEW: Render drifting clouds
+  private renderClouds(): void {
+    const ctx = this.ctx;
+    ctx.save();
+
+    for (const cloud of this.clouds) {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+      ctx.beginPath();
+      // Draw cloud as multiple overlapping circles
+      ctx.arc(cloud.x, cloud.y, cloud.size * 0.6, 0, Math.PI * 2);
+      ctx.arc(cloud.x + cloud.size * 0.5, cloud.y, cloud.size * 0.5, 0, Math.PI * 2);
+      ctx.arc(cloud.x - cloud.size * 0.5, cloud.y, cloud.size * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
   private renderGround(): void {
     const ctx = this.ctx;
     // Draw enhanced grass tiles with depth and organic texture
@@ -286,15 +346,20 @@ export class Renderer {
         // Seeded random based on tile position for consistent patterns
         const seed = x * 17 + y * 31;
 
-        // Grass blade details (small vertical strokes)
+        // Grass blade details (small vertical strokes) - NEW: with wave animation
         ctx.strokeStyle = 'rgba(0, 80, 0, 0.15)';
         ctx.lineWidth = 1;
         for (let i = 0; i < 5; i++) {
           const bladeX = px + ((seed * (i + 1) * 7) % (TILE_SIZE - 4)) + 2;
           const bladeY = py + ((seed * (i + 2) * 11) % (TILE_SIZE - 8)) + 4;
+
+          // NEW: Add wave animation (different speed for each blade for organic feel)
+          const waveSpeed = 1.5 + (seed % 3) * 0.5; // Vary wave speed
+          const waveOffset = Math.sin(this.grassWaveTime * waveSpeed + seed * 0.1) * 1.5;
+
           ctx.beginPath();
           ctx.moveTo(bladeX, bladeY + 4);
-          ctx.lineTo(bladeX + ((i % 2) ? 1 : -1), bladeY);
+          ctx.lineTo(bladeX + ((i % 2) ? 1 : -1) + waveOffset, bladeY);
           ctx.stroke();
         }
 

@@ -142,7 +142,17 @@ export class Player extends Entity {
       baseSquashX = 1 + wobble;
       baseSquashY = 1 - wobble;
 
-      // Speed trail
+      // NEW: Dust clouds while running (emit continuously)
+      if (Math.random() < 0.15) { // 15% chance each frame
+        EventBus.emit('player-dust-cloud', { player: this, direction: this.direction });
+      }
+
+      // NEW: Speed lines when moving fast
+      if (this.speed > DEFAULT_PLAYER_SPEED && Math.random() < 0.4) {
+        EventBus.emit('player-speed-lines', { player: this, direction: this.direction });
+      }
+
+      // Speed trail (keep existing)
       if (this.speed > DEFAULT_PLAYER_SPEED && Math.random() < 0.3) {
         EventBus.emit('player-trail', { player: this });
       }

@@ -42,6 +42,11 @@ export class Bomb extends Entity {
     this.timer -= deltaTime;
     this.pulseTimer += deltaTime;
 
+    // Emit danger sparks when bomb is about to explode
+    if (this.timer < 1.0 && Math.random() < 0.3) {
+      EventBus.emit('bomb-danger-sparks', { bomb: this });
+    }
+
     // Update punch animation
     if (this.isPunched) {
       this.punchProgress += deltaTime / this.punchDuration;

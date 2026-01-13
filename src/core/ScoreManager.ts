@@ -20,7 +20,7 @@ export class ScoreManager {
     }
 
     update(deltaTime: number): void {
-        for (const [playerId, data] of this.multipliers) {
+        for (const [_playerId, data] of this.multipliers) {
             if (data.timer > 0) {
                 data.timer -= deltaTime;
                 if (data.timer <= 0) {

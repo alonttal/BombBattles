@@ -244,6 +244,140 @@ export const PARTICLE_PRESETS = {
     colors: ['#ffffff', '#ffff00'], // Override with player color
     gravity: 0,
     shape: 'circle' as const
+  },
+
+  // NEW: Lingering embers that float upward after explosions
+  embers: {
+    count: 18,
+    spread: 20,
+    speed: { min: 10, max: 40 },
+    angle: { min: -Math.PI * 0.75, max: -Math.PI * 0.25 }, // Mostly upward
+    lifetime: { min: 1.0, max: 2.0 },
+    size: { min: 2, max: 5 },
+    colors: ['#ff6600', '#ff9933', '#ffcc66', '#ffffff'],
+    gravity: -15, // Slow upward drift
+    friction: 0.98,
+    shape: 'circle' as const
+  },
+
+  // NEW: Expanding smoke clouds with rotation
+  expandingSmoke: {
+    count: 10,
+    spread: 12,
+    speed: { min: 15, max: 35 },
+    lifetime: { min: 1.2, max: 1.8 },
+    size: { min: 12, max: 24 },
+    colors: ['#555555', '#777777', '#999999'],
+    gravity: -20, // Rises slowly
+    friction: 0.97,
+    shape: 'circle' as const
+  },
+
+  // NEW: Dust clouds for running players
+  dustCloud: {
+    count: 2,
+    spread: 6,
+    speed: { min: 5, max: 15 },
+    lifetime: { min: 0.3, max: 0.6 },
+    size: { min: 4, max: 8 },
+    colors: ['#999999', '#aaaaaa', '#bbbbbb'],
+    gravity: 0,
+    friction: 0.92,
+    shape: 'circle' as const
+  },
+
+  // NEW: Speed lines for fast movement
+  speedLines: {
+    count: 3,
+    spread: 8,
+    speed: { min: 0, max: 5 },
+    lifetime: { min: 0.15, max: 0.3 },
+    size: { min: 2, max: 4 },
+    colors: ['#ffffff', '#eeeeee'],
+    gravity: 0,
+    friction: 1.0,
+    shape: 'spark' as const // Elongated lines
+  },
+
+  // NEW: Ambient wind particles (leaves, petals)
+  windParticles: {
+    count: 1,
+    spread: 0,
+    speed: { min: 30, max: 50 },
+    angle: { min: Math.PI * 0.1, max: Math.PI * 0.3 }, // Diagonal drift
+    lifetime: { min: 3.0, max: 5.0 },
+    size: { min: 3, max: 6 },
+    colors: ['#7FD957', '#FFFFFF', '#FFC0CB'], // Green, white, pink
+    gravity: 5, // Slight downward drift
+    friction: 0.995,
+    shape: 'square' as const
+  },
+
+  // NEW: Impact burst when landing
+  impactBurst: {
+    count: 8,
+    spread: 0,
+    speed: { min: 40, max: 80 },
+    lifetime: { min: 0.2, max: 0.4 },
+    size: { min: 2, max: 5 },
+    colors: ['#cccccc', '#999999', '#ffffff'],
+    gravity: 100,
+    friction: 0.9,
+    shape: 'circle' as const
+  },
+
+  // NEW: Danger sparks emanating from bombs
+  dangerSparks: {
+    count: 4,
+    spread: 0,
+    speed: { min: 30, max: 60 },
+    lifetime: { min: 0.3, max: 0.6 },
+    size: { min: 2, max: 4 },
+    colors: ['#ff0000', '#ff4444', '#ff8888', '#ffff00'],
+    gravity: 80,
+    friction: 0.95,
+    shape: 'spark' as const
+  },
+
+  // NEW: Wall collision bump stars
+  wallBump: {
+    count: 6,
+    spread: 10,
+    speed: { min: 20, max: 50 },
+    lifetime: { min: 0.2, max: 0.4 },
+    size: { min: 4, max: 8 },
+    colors: ['#ffff00', '#ffffff', '#ffcc00'],
+    gravity: 100,
+    friction: 0.92,
+    shape: 'square' as const
+  },
+
+  // NEW: Sky beam for power-up appearance
+  skyBeam: {
+    count: 15,
+    spread: 6,
+    speed: { min: 50, max: 100 },
+    angle: { min: Math.PI * 0.25, max: Math.PI * 0.75 }, // Downward
+    lifetime: { min: 0.5, max: 0.8 },
+    size: { min: 3, max: 6 },
+    colors: ['#ffff00', '#ffffff', '#ffcc88'],
+    gravity: 100,
+    friction: 0.97,
+    shape: 'spark' as const
+  },
+
+  // NEW: Confetti for victory celebration
+  confetti: {
+    count: 30,
+    spread: 30,
+    speed: { min: 80, max: 150 },
+    angle: { min: -Math.PI * 0.3, max: -Math.PI * 0.7 }, // Upward spray
+    lifetime: { min: 1.5, max: 2.5 },
+    size: { min: 3, max: 7 },
+    colors: ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff6600', '#ff0099'],
+    gravity: 120,
+    friction: 0.98,
+    shape: 'square' as const
   }
 };
 

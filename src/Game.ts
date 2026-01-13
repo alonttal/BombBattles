@@ -26,9 +26,12 @@ import { AIController } from './ai/AIController';
 import { ScoreManager, ScoreEvent } from './core/ScoreManager';
 import { FloatingText } from './rendering/FloatingText';
 import { Camera } from './rendering/Camera';
+import {ParticleSystem} from "./rendering/ParticleSystem.ts";
 
 export class Game {
   private renderer: Renderer;
+  private particleSystem: ParticleSystem;
+  private camera: Camera;
   private inputManager: InputManager;
   private gameLoop: GameLoop;
 
@@ -59,6 +62,8 @@ export class Game {
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new Renderer(canvas);
+    this.particleSystem = new ParticleSystem();
+    this.camera = new Camera()
     this.inputManager = new InputManager();
     this.gameLoop = new GameLoop(
       this.update.bind(this),
@@ -83,6 +88,9 @@ export class Game {
     EventBus.on('teleport-arrived', this.onTeleportArrived.bind(this));
     EventBus.on('player-step', this.onPlayerStep.bind(this));
     EventBus.on('player-trail', this.onPlayerTrail.bind(this));
+    EventBus.on('player-dust-cloud', this.onPlayerDustCloud.bind(this));
+    EventBus.on('player-speed-lines', this.onPlayerSpeedLines.bind(this));
+    EventBus.on('bomb-danger-sparks', this.onBombDangerSparks.bind(this));
     EventBus.on('shield-consumed', this.onShieldConsumed.bind(this));
   }
 
@@ -583,8 +591,13 @@ export class Game {
       player.position.gridX = Math.round(newPixelX / TILE_SIZE);
       player.position.gridY = Math.round(newPixelY / TILE_SIZE);
     } else {
-      // Try corner sliding
+      // Try corner sliding (for all players)
       this.tryCornerSlide(player, direction, deltaTime);
+
+      // For AI players, also try more aggressive grid alignment
+      if (this.aiPlayers.has(player.playerIndex)) {
+        this.tryAIGridAlignment(player, direction, deltaTime);
+      }
     }
 
     const moved = Math.abs(player.position.pixelX - startPixelX) > 0.01 ||
@@ -594,6 +607,20 @@ export class Game {
       player.move(direction, 0); // Updates direction and sets isMoving = true
     } else {
       player.stopMoving(); // Ensure animation stops if blocked
+
+      // Emit wall bump stars occasionally when blocked
+      if (Math.random() < 0.15) {
+        const bumpX = player.position.pixelX + TILE_SIZE / 2;
+        const bumpY = player.position.pixelY + TILE_SIZE / 2;
+
+        // Offset bump position based on direction
+        switch (direction) {
+          case Direction.UP: this.particleSystem.emitPreset('wallBump', bumpX, bumpY - TILE_SIZE / 2); break;
+          case Direction.DOWN: this.particleSystem.emitPreset('wallBump', bumpX, bumpY + TILE_SIZE / 2); break;
+          case Direction.LEFT: this.particleSystem.emitPreset('wallBump', bumpX - TILE_SIZE / 2, bumpY); break;
+          case Direction.RIGHT: this.particleSystem.emitPreset('wallBump', bumpX + TILE_SIZE / 2, bumpY); break;
+        }
+      }
       // We still want to update direction if they are pressing the key?
       // Usually yes, even if blocked, you face the wall.
       // But player.move sets isMoving=true. 
@@ -637,6 +664,57 @@ export class Game {
         player.position.pixelY -= slideAmount;
       } else if (offsetY > TILE_SIZE - threshold) {
         player.position.pixelY += slideAmount;
+      }
+    }
+  }
+
+  /**
+   * AI-specific grid alignment helper. More aggressive than tryCornerSlide.
+   * Helps AI players align to the grid when movement is blocked, since AI logic
+   * operates on grid coordinates but player movement is pixel-based.
+   */
+  private tryAIGridAlignment(player: Player, direction: Direction, deltaTime: number): void {
+    const speed = player.getEffectiveSpeed();
+    const alignmentSpeed = speed * TILE_SIZE * deltaTime * 1.2; // Faster than corner slide
+
+    const currentPixelX = player.position.pixelX;
+    const currentPixelY = player.position.pixelY;
+
+    // Calculate the aligned grid position (center of grid cell)
+    const targetGridX = Math.round(currentPixelX / TILE_SIZE);
+    const targetGridY = Math.round(currentPixelY / TILE_SIZE);
+    const alignedPixelX = targetGridX * TILE_SIZE;
+    const alignedPixelY = targetGridY * TILE_SIZE;
+
+    // When moving horizontally (LEFT/RIGHT), align vertically
+    if (direction === Direction.LEFT || direction === Direction.RIGHT) {
+      const verticalOffset = Math.abs(currentPixelY - alignedPixelY);
+
+      // If misaligned vertically, gradually align toward grid center
+      if (verticalOffset > 0.5) {
+        if (currentPixelY < alignedPixelY) {
+          player.position.pixelY = Math.min(alignedPixelY, currentPixelY + alignmentSpeed);
+        } else {
+          player.position.pixelY = Math.max(alignedPixelY, currentPixelY - alignmentSpeed);
+        }
+        // Update grid position after alignment
+        player.position.gridY = Math.round(player.position.pixelY / TILE_SIZE);
+      }
+    }
+
+    // When moving vertically (UP/DOWN), align horizontally
+    if (direction === Direction.UP || direction === Direction.DOWN) {
+      const horizontalOffset = Math.abs(currentPixelX - alignedPixelX);
+
+      // If misaligned horizontally, gradually align toward grid center
+      if (horizontalOffset > 0.5) {
+        if (currentPixelX < alignedPixelX) {
+          player.position.pixelX = Math.min(alignedPixelX, currentPixelX + alignmentSpeed);
+        } else {
+          player.position.pixelX = Math.max(alignedPixelX, currentPixelX - alignmentSpeed);
+        }
+        // Update grid position after alignment
+        player.position.gridX = Math.round(player.position.pixelX / TILE_SIZE);
       }
     }
   }
@@ -735,6 +813,12 @@ export class Game {
     player.activeBombs++;
 
     SoundManager.play('bombPlace');
+
+    // Visual effects for bomb placement
+    const centerX = gridX * TILE_SIZE + TILE_SIZE / 2;
+    const centerY = gridY * TILE_SIZE + TILE_SIZE / 2;
+    this.particleSystem.emitPreset('impactBurst', centerX, centerY);
+    this.camera.shake(2, 0.15);
   }
 
   private tryPunchBomb(player: Player): void {
@@ -909,6 +993,53 @@ export class Game {
     );
   }
 
+  private onPlayerDustCloud(data: { player: Player; direction: Direction }): void {
+    const player = data.player;
+    // Emit dust behind the player based on direction
+    let offsetX = TILE_SIZE / 2;
+    let offsetY = TILE_SIZE / 2;
+
+    switch (data.direction) {
+      case Direction.UP: offsetY = TILE_SIZE; break;
+      case Direction.DOWN: offsetY = 0; break;
+      case Direction.LEFT: offsetX = TILE_SIZE; break;
+      case Direction.RIGHT: offsetX = 0; break;
+    }
+
+    this.renderer.getParticleSystem().emitPreset(
+      'dustCloud',
+      player.position.pixelX + offsetX,
+      player.position.pixelY + offsetY
+    );
+  }
+
+  private onPlayerSpeedLines(data: { player: Player; direction: Direction }): void {
+    const player = data.player;
+    // Emit speed lines behind the player
+    let offsetX = TILE_SIZE / 2;
+    let offsetY = TILE_SIZE / 2;
+
+    switch (data.direction) {
+      case Direction.UP: offsetY = TILE_SIZE * 0.75; break;
+      case Direction.DOWN: offsetY = TILE_SIZE * 0.25; break;
+      case Direction.LEFT: offsetX = TILE_SIZE * 0.75; break;
+      case Direction.RIGHT: offsetX = TILE_SIZE * 0.25; break;
+    }
+
+    this.renderer.getParticleSystem().emitPreset(
+      'speedLines',
+      player.position.pixelX + offsetX,
+      player.position.pixelY + offsetY
+    );
+  }
+
+  private onBombDangerSparks(data: { bomb: Bomb }): void {
+    const bomb = data.bomb;
+    const centerX = bomb.position.pixelX + TILE_SIZE / 2;
+    const centerY = bomb.position.pixelY + TILE_SIZE / 2;
+    this.particleSystem.emitPreset('dangerSparks', centerX, centerY);
+  }
+
   private onShieldConsumed(data: { player: Player }): void {
     const player = data.player;
     this.renderer.getParticleSystem().emitPreset(
@@ -1030,6 +1161,14 @@ export class Game {
     // Add smoke at the center
     particles.emitPreset('smoke', centerX, centerY);
 
+    // NEW: Add lingering embers that float upward
+    if (type !== BombType.ICE) { // No embers for ice bombs
+      particles.emitPreset('embers', centerX, centerY);
+    }
+
+    // NEW: Add expanding smoke clouds
+    particles.emitPreset('expandingSmoke', centerX, centerY);
+
     // Add particles at explosion endpoints for extra visual impact
     for (const tile of tiles) {
       if (tile.isEnd) {
@@ -1141,6 +1280,11 @@ export class Game {
       if (!this.grid[pending.y][pending.x]) {
         const powerUp = new PowerUp(pending.x, pending.y, pending.type);
         this.powerUps.push(powerUp);
+
+        // Emit sky beam effect when power-up appears
+        const centerX = pending.x * TILE_SIZE + TILE_SIZE / 2;
+        const centerY = pending.y * TILE_SIZE + TILE_SIZE / 2;
+        this.particleSystem.emitPreset('skyBeam', centerX, centerY);
       }
     }
 
@@ -1321,6 +1465,28 @@ export class Game {
       this.phase = GamePhase.GAME_OVER;
       SoundManager.stopMusic();
       SoundManager.play('gameOver');
+
+      // Victory confetti effect
+      if (this.winner) {
+        const winnerX = this.winner.position.pixelX + TILE_SIZE / 2;
+        const winnerY = this.winner.position.pixelY + TILE_SIZE / 2;
+
+        // Emit confetti at winner's position
+        for (let i = 0; i < 3; i++) {
+          setTimeout(() => {
+            this.particleSystem.emitPreset('confetti', winnerX, winnerY);
+          }, i * 150);
+        }
+
+        // Emit confetti at random locations for celebration
+        for (let i = 0; i < 4; i++) {
+          setTimeout(() => {
+            const randomX = Math.random() * CANVAS_WIDTH;
+            const randomY = Math.random() * CANVAS_HEIGHT * 0.7; // Top 70% of screen
+            this.particleSystem.emitPreset('confetti', randomX, randomY);
+          }, i * 200);
+        }
+      }
 
       // Dramatic slow motion zoom? Or just zoom
       this.renderer.getCamera().zoomTo(1.1, 1.0);
