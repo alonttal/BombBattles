@@ -321,6 +321,9 @@ export class Game {
       explosion.update(deltaTime);
     }
 
+    // Check for continuous explosion damage (players walking into flames)
+    this.checkExplosionCollisions();
+
     for (const powerUp of this.powerUps) {
       powerUp.update(deltaTime);
     }
@@ -1066,6 +1069,24 @@ export class Game {
 
     // Camera shake
     this.renderer.getCamera().shake({ duration: 0.15, intensity: 3, frequency: 25 });
+  }
+
+  private checkExplosionCollisions(): void {
+    // Check if any alive players are currently on active explosion tiles
+    for (const explosion of this.explosions) {
+      if (!explosion.isActive) continue;
+
+      for (const tile of explosion.tiles) {
+        for (const player of this.players) {
+          if (!player.isPlayerAlive()) continue;
+
+          // Check if player is on this explosion tile
+          if (player.position.gridX === tile.gridX && player.position.gridY === tile.gridY) {
+            player.die();
+          }
+        }
+      }
+    }
   }
 
   private onBombExplode(data: { bomb: Bomb; gridX: number; gridY: number; range: number; type: BombType }): void {
