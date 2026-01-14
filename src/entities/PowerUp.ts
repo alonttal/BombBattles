@@ -1,5 +1,5 @@
 import { Entity } from './Entity';
-import { TILE_SIZE } from '../constants';
+import { TILE_SIZE, RETRO_PALETTE } from '../constants';
 
 export enum PowerUpType {
   BOMB_UP = 'bomb_up',
@@ -15,18 +15,133 @@ export enum PowerUpType {
   SKULL = 'skull'
 }
 
-const POWERUP_COLORS: Record<PowerUpType, { bg: string; icon: string }> = {
-  [PowerUpType.BOMB_UP]: { bg: '#4DB8FF', icon: '💣' }, // Bright sky blue
-  [PowerUpType.FIRE_UP]: { bg: '#FF4757', icon: '🔥' }, // Bright red
-  [PowerUpType.SPEED_UP]: { bg: '#7BED9F', icon: '⚡' }, // Bright green
-  [PowerUpType.SHIELD]: { bg: '#00E5FF', icon: '🛡️' }, // Cyan
-  [PowerUpType.KICK]: { bg: '#FFA502', icon: '👟' }, // Bright orange
-  [PowerUpType.PUNCH]: { bg: '#C77DFF', icon: '👊' }, // Bright purple
-  [PowerUpType.TELEPORT]: { bg: '#4ECDC4', icon: '✨' }, // Turquoise
-  [PowerUpType.FIRE_BOMB]: { bg: '#FF6348', icon: '🌋' }, // Coral red
-  [PowerUpType.ICE_BOMB]: { bg: '#70A1FF', icon: '❄️' }, // Ice blue
-  [PowerUpType.PIERCING_BOMB]: { bg: '#A55EEA', icon: '💜' }, // Purple
-  [PowerUpType.SKULL]: { bg: '#57606F', icon: '💀' } // Medium grey (not too dark)
+// Retro pixel colors for power-ups
+const POWERUP_COLORS: Record<PowerUpType, { bg: string; light: string; dark: string }> = {
+  [PowerUpType.BOMB_UP]: { bg: '#639bff', light: '#99c0ff', dark: '#3b6ec0' },
+  [PowerUpType.FIRE_UP]: { bg: RETRO_PALETTE.fireOrange, light: RETRO_PALETTE.fireYellow, dark: RETRO_PALETTE.fireRed },
+  [PowerUpType.SPEED_UP]: { bg: RETRO_PALETTE.uiGreen, light: '#99e550', dark: '#4b8a2b' },
+  [PowerUpType.SHIELD]: { bg: RETRO_PALETTE.iceCyan, light: RETRO_PALETTE.iceWhite, dark: RETRO_PALETTE.iceBlue },
+  [PowerUpType.KICK]: { bg: '#f77622', light: '#fbf236', dark: '#ab7030' },
+  [PowerUpType.PUNCH]: { bg: RETRO_PALETTE.magicPink, light: RETRO_PALETTE.magicWhite, dark: RETRO_PALETTE.magicPurple },
+  [PowerUpType.TELEPORT]: { bg: '#5fcde4', light: '#99e5ff', dark: '#3f3f74' },
+  [PowerUpType.FIRE_BOMB]: { bg: RETRO_PALETTE.fireRed, light: RETRO_PALETTE.fireOrange, dark: RETRO_PALETTE.fireDark },
+  [PowerUpType.ICE_BOMB]: { bg: RETRO_PALETTE.iceBlue, light: RETRO_PALETTE.iceCyan, dark: RETRO_PALETTE.iceDark },
+  [PowerUpType.PIERCING_BOMB]: { bg: RETRO_PALETTE.magicPurple, light: RETRO_PALETTE.magicPink, dark: RETRO_PALETTE.magicDark },
+  [PowerUpType.SKULL]: { bg: '#696a6a', light: '#9badb7', dark: '#45444f' }
+};
+
+// 8x8 pixel icon sprites for each power-up type
+const POWERUP_ICONS: Record<PowerUpType, string[]> = {
+  [PowerUpType.BOMB_UP]: [
+    '...XX...',
+    '...XX...',
+    '.XXXXXX.',
+    '.XXXXXX.',
+    'XXXXXXXX',
+    'XXXXXXXX',
+    '.XXXXXX.',
+    '...XX...',
+  ],
+  [PowerUpType.FIRE_UP]: [
+    '...XX...',
+    '..XXXX..',
+    '.XXXXXX.',
+    '.XXXXXX.',
+    'XXXXXXXX',
+    '.XX..XX.',
+    '.X....X.',
+    '........',
+  ],
+  [PowerUpType.SPEED_UP]: [
+    '....XX..',
+    '...XX...',
+    '..XXXX..',
+    '.XXXXXX.',
+    '..XXXX..',
+    '...XX...',
+    '..XX....',
+    '.XX.....',
+  ],
+  [PowerUpType.SHIELD]: [
+    '.XXXXXX.',
+    'XXXXXXXX',
+    'XXXXXXXX',
+    'XXXXXXXX',
+    '.XXXXXX.',
+    '..XXXX..',
+    '...XX...',
+    '........',
+  ],
+  [PowerUpType.KICK]: [
+    '........',
+    '.XXXXX..',
+    'XXXXXXX.',
+    'XXXXXXXX',
+    '.XXXXXX.',
+    '..XXXX..',
+    '..XXXX..',
+    '........',
+  ],
+  [PowerUpType.PUNCH]: [
+    '........',
+    '..XXXX..',
+    '.XXXXXX.',
+    'XXXXXXXX',
+    'XXXXXXXX',
+    '.XXXXXX.',
+    '..XX.XX.',
+    '........',
+  ],
+  [PowerUpType.TELEPORT]: [
+    '...X....',
+    '..XXX...',
+    '.X.X.X..',
+    'XXXXXXX.',
+    '.X.X.X..',
+    '..XXX...',
+    '...X....',
+    '........',
+  ],
+  [PowerUpType.FIRE_BOMB]: [
+    '..XX....',
+    '..X.X...',
+    '.XXXXX..',
+    '.XXXXXX.',
+    'XXXXXXXX',
+    'XXXXXXXX',
+    '.XXXXXX.',
+    '..XXXX..',
+  ],
+  [PowerUpType.ICE_BOMB]: [
+    '...X....',
+    '.X.X.X..',
+    '..XXX...',
+    'XXXXXXX.',
+    '..XXX...',
+    '.X.X.X..',
+    '...X....',
+    '........',
+  ],
+  [PowerUpType.PIERCING_BOMB]: [
+    '...XX...',
+    '..XXXX..',
+    '.XXXXXX.',
+    'XXXXXXXX',
+    'XXXXXXXX',
+    '.XXXXXX.',
+    '..XXXX..',
+    '...XX...',
+  ],
+  [PowerUpType.SKULL]: [
+    '..XXXX..',
+    '.XXXXXX.',
+    'X.XX.XX.',
+    'XXXXXXXX',
+    'XXXXXXXX',
+    '.XXXXXX.',
+    '.X.XX.X.',
+    '........',
+  ],
 };
 
 export class PowerUp extends Entity {
@@ -43,191 +158,97 @@ export class PowerUp extends Entity {
   }
 
   render(ctx: CanvasRenderingContext2D, _interpolation: number): void {
-    const x = this.position.pixelX;
-    const y = this.position.pixelY;
-    const bobOffset = Math.sin(this.bobTimer * 4) * 4; // Increased bob
+    const x = Math.floor(this.position.pixelX);
+    const y = Math.floor(this.position.pixelY);
+
+    // Discrete bobbing - snap to 3 positions
+    const bobPhase = Math.floor((this.bobTimer * 4) % 3);
+    const bobOffsets = [0, -3, -6];
+    const bobOffset = bobOffsets[bobPhase];
 
     const colors = POWERUP_COLORS[this.type];
-    const centerX = x + TILE_SIZE / 2;
-    const centerY = y + TILE_SIZE / 2 + bobOffset;
+    const size = 32; // 32x32 pixel power-up
+    const offsetX = x + (TILE_SIZE - size) / 2;
+    const offsetY = y + (TILE_SIZE - size) / 2 + bobOffset;
 
-    // Heartbeat pulse effect (more pronounced)
-    const pulse = 1 + Math.sin(this.bobTimer * 8) * 0.15;
-    const radius = (TILE_SIZE / 2 - 6) * pulse;
+    // Discrete pulse - 2 sizes
+    const isPulsed = Math.floor(this.bobTimer * 6) % 2 === 0;
+    const scale = isPulsed ? 1.0 : 0.9;
+    const scaledSize = Math.floor(size * scale);
+    const scaleOffset = (size - scaledSize) / 2;
 
-    // Outer glow ring (pulsing)
-    const glowPulse = 1 + Math.sin(this.bobTimer * 6) * 0.2;
-    ctx.shadowColor = colors.bg;
-    ctx.shadowBlur = 20 * glowPulse;
-    ctx.strokeStyle = colors.bg;
-    ctx.lineWidth = 3;
-    ctx.globalAlpha = 0.4;
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, radius + 5, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-    ctx.shadowBlur = 0;
+    const drawX = Math.floor(offsetX + scaleOffset);
+    const drawY = Math.floor(offsetY + scaleOffset);
 
-    // Strong glow effect
-    ctx.shadowColor = colors.bg;
-    ctx.shadowBlur = 25;
+    // Draw alternating border (2 colors)
+    const borderColor = Math.floor(this.bobTimer * 8) % 2 === 0 ? '#ffffff' : colors.light;
+    ctx.fillStyle = borderColor;
+    ctx.fillRect(drawX - 2, drawY - 2, scaledSize + 4, scaledSize + 4);
 
-    // Background circle
+    // Main background
     ctx.fillStyle = colors.bg;
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.fillRect(drawX, drawY, scaledSize, scaledSize);
 
-    ctx.shadowBlur = 0;
+    // Inner dark border
+    ctx.fillStyle = colors.dark;
+    ctx.fillRect(drawX + 2, drawY + scaledSize - 4, scaledSize - 4, 2);
+    ctx.fillRect(drawX + scaledSize - 4, drawY + 2, 2, scaledSize - 4);
 
-    // Border (thick white outline)
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 3;
-    ctx.stroke();
+    // Inner light highlight
+    ctx.fillStyle = colors.light;
+    ctx.fillRect(drawX + 2, drawY + 2, scaledSize - 6, 2);
+    ctx.fillRect(drawX + 2, drawY + 2, 2, scaledSize - 6);
 
-    // Inner highlight for depth
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-    ctx.beginPath();
-    ctx.arc(centerX - 4, centerY - 4, radius * 0.3, 0, Math.PI * 2);
-    ctx.fill();
+    // Draw the icon sprite
+    this.drawPixelIcon(ctx, drawX + 4, drawY + 4, scaledSize - 8);
 
-    // Draw sparkles around the powerup
-    this.drawSparkles(ctx, centerX, centerY, radius + 8);
-
-    // Icon (using simple shapes instead of emoji for consistency)
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 16px Arial';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    // Draw simplified icons
-    this.drawIcon(ctx, centerX, centerY);
+    // Draw pixel sparkles
+    this.drawPixelSparkles(ctx, drawX + scaledSize / 2, drawY + scaledSize / 2, scaledSize / 2 + 8);
   }
 
-  private drawIcon(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+  private drawPixelIcon(ctx: CanvasRenderingContext2D, x: number, y: number, size: number): void {
+    const icon = POWERUP_ICONS[this.type];
+    const pixelSize = Math.floor(size / 8);
+
     ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
 
-    switch (this.type) {
-      case PowerUpType.BOMB_UP:
-        // Plus sign
-        ctx.fillRect(x - 8, y - 2, 16, 4);
-        ctx.fillRect(x - 2, y - 8, 4, 16);
-        break;
-
-      case PowerUpType.FIRE_UP:
-        // Flame shape
-        ctx.beginPath();
-        ctx.moveTo(x, y - 10);
-        ctx.quadraticCurveTo(x + 8, y - 4, x + 6, y + 6);
-        ctx.quadraticCurveTo(x, y + 2, x - 6, y + 6);
-        ctx.quadraticCurveTo(x - 8, y - 4, x, y - 10);
-        ctx.fill();
-        break;
-
-      case PowerUpType.SPEED_UP:
-        // Lightning bolt
-        ctx.beginPath();
-        ctx.moveTo(x + 4, y - 10);
-        ctx.lineTo(x - 2, y);
-        ctx.lineTo(x + 2, y);
-        ctx.lineTo(x - 4, y + 10);
-        ctx.lineTo(x + 2, y + 2);
-        ctx.lineTo(x - 2, y + 2);
-        ctx.closePath();
-        ctx.fill();
-        break;
-
-      case PowerUpType.SHIELD:
-        // Shield shape
-        ctx.beginPath();
-        ctx.moveTo(x, y - 10);
-        ctx.lineTo(x + 10, y - 5);
-        ctx.lineTo(x + 8, y + 5);
-        ctx.lineTo(x, y + 10);
-        ctx.lineTo(x - 8, y + 5);
-        ctx.lineTo(x - 10, y - 5);
-        ctx.closePath();
-        ctx.stroke();
-        break;
-
-      case PowerUpType.KICK:
-        // Boot shape
-        ctx.beginPath();
-        ctx.arc(x, y, 8, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillRect(x - 2, y, 10, 6);
-        break;
-
-      case PowerUpType.TELEPORT:
-        // Star
-        this.drawStar(ctx, x, y, 5, 10, 5);
-        break;
-
-      case PowerUpType.SKULL:
-        // Skull
-        ctx.beginPath();
-        ctx.arc(x, y - 2, 8, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = POWERUP_COLORS[this.type].bg;
-        ctx.beginPath();
-        ctx.arc(x - 3, y - 3, 2, 0, Math.PI * 2);
-        ctx.arc(x + 3, y - 3, 2, 0, Math.PI * 2);
-        ctx.fill();
-        break;
-
-      default:
-        // Default: circle with letter
-        ctx.font = 'bold 14px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(this.type[0].toUpperCase(), x, y);
-    }
-  }
-
-  private drawStar(ctx: CanvasRenderingContext2D, cx: number, cy: number, spikes: number, outerRadius: number, innerRadius: number): void {
-    ctx.beginPath();
-    for (let i = 0; i < spikes * 2; i++) {
-      const radius = i % 2 === 0 ? outerRadius : innerRadius;
-      const angle = (i * Math.PI) / spikes - Math.PI / 2;
-      const x = cx + Math.cos(angle) * radius;
-      const y = cy + Math.sin(angle) * radius;
-      if (i === 0) {
-        ctx.moveTo(x, y);
-      } else {
-        ctx.lineTo(x, y);
+    for (let py = 0; py < icon.length; py++) {
+      const row = icon[py];
+      for (let px = 0; px < row.length; px++) {
+        if (row[px] === 'X') {
+          ctx.fillRect(
+            Math.floor(x + px * pixelSize),
+            Math.floor(y + py * pixelSize),
+            pixelSize,
+            pixelSize
+          );
+        }
       }
     }
-    ctx.closePath();
-    ctx.fill();
   }
 
-  private drawSparkles(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius: number): void {
-    // Draw 4 rotating sparkles around the powerup
+  private drawPixelSparkles(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius: number): void {
+    // 4 pixel sparkles that appear/disappear
     const sparkleCount = 4;
-    const rotation = this.bobTimer * 2; // Rotate sparkles over time
+    const rotation = Math.floor(this.bobTimer * 3) * (Math.PI / 4);
 
     for (let i = 0; i < sparkleCount; i++) {
+      // Each sparkle has its own phase - appears and disappears
+      const sparklePhase = Math.floor(this.bobTimer * 8 + i * 2) % 4;
+      if (sparklePhase === 0) continue; // Hidden this frame
+
       const angle = (i / sparkleCount) * Math.PI * 2 + rotation;
-      const x = cx + Math.cos(angle) * radius;
-      const y = cy + Math.sin(angle) * radius;
+      const x = Math.floor(cx + Math.cos(angle) * radius);
+      const y = Math.floor(cy + Math.sin(angle) * radius);
 
-      // Sparkle size pulses
-      const sparklePulse = Math.abs(Math.sin(this.bobTimer * 10 + i));
-      const size = 3 + sparklePulse * 2;
+      // Discrete sparkle sizes
+      const sparkleSize = sparklePhase === 2 ? 3 : 2;
 
-      ctx.fillStyle = 'rgba(255, 255, 255, ' + (0.6 + sparklePulse * 0.4) + ')';
-      ctx.beginPath();
+      ctx.fillStyle = sparklePhase === 2 ? '#ffffff' : '#ffffaa';
 
-      // Draw a simple cross/plus shape for sparkle
-      ctx.fillRect(x - size, y - 0.5, size * 2, 1);
-      ctx.fillRect(x - 0.5, y - size, 1, size * 2);
-
-      // Add a small circle in the center
-      ctx.beginPath();
-      ctx.arc(x, y, 1.5, 0, Math.PI * 2);
-      ctx.fill();
+      // Simple cross sparkle
+      ctx.fillRect(x - sparkleSize, y, sparkleSize * 2 + 1, 1);
+      ctx.fillRect(x, y - sparkleSize, 1, sparkleSize * 2 + 1);
     }
   }
 }

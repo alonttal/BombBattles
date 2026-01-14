@@ -821,7 +821,7 @@ export class Game {
     const centerX = gridX * TILE_SIZE + TILE_SIZE / 2;
     const centerY = gridY * TILE_SIZE + TILE_SIZE / 2;
     this.particleSystem.emitPreset('impactBurst', centerX, centerY);
-    this.camera.shake(2, 0.15);
+    this.camera.shakePreset('subtle');
   }
 
   private tryPunchBomb(player: Player): void {

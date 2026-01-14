@@ -45,6 +45,80 @@ export const COLORS = {
   powerUp: '#FF1493'     // Deep Pink (exciting)
 };
 
+// Retro Pixel Art Color Palette (inspired by classic 8/16-bit systems)
+export const RETRO_PALETTE = {
+  // Background greens
+  grassLight: '#6abe30',
+  grassMid: '#4b8a2b',
+  grassDark: '#3f6731',
+  grassShadow: '#2c4a22',
+  grassHighlight: '#8cd93f',
+
+  // Sky blues
+  skyLight: '#99e5ff',
+  skyMid: '#5fcde4',
+  skyDark: '#639bff',
+
+  // Warm explosion/fire colors
+  fireWhite: '#ffffff',
+  fireYellow: '#fbf236',
+  fireOrange: '#f77622',
+  fireRed: '#ac3232',
+  fireDark: '#45283c',
+
+  // Ice colors
+  iceWhite: '#ffffff',
+  iceCyan: '#99e5ff',
+  iceBlue: '#5fcde4',
+  iceDark: '#3f3f74',
+
+  // Piercing/magic colors
+  magicWhite: '#ffffff',
+  magicPink: '#d77bba',
+  magicPurple: '#76428a',
+  magicDark: '#45283c',
+
+  // Block/terrain colors
+  wallLight: '#9badb7',
+  wallMid: '#696a6a',
+  wallDark: '#45444f',
+  wallHighlight: '#cbdbfc',
+  woodLight: '#d9a066',
+  woodMid: '#ab7030',
+  woodDark: '#663931',
+  woodHighlight: '#eec39a',
+
+  // Bomb colors
+  bombBody: '#222222',
+  bombHighlight: '#555555',
+  bombFuse: '#8a6f30',
+  bombSpark: '#fbf236',
+
+  // UI colors
+  uiBlack: '#222034',
+  uiDark: '#45283c',
+  uiMid: '#76428a',
+  uiLight: '#9badb7',
+  uiWhite: '#ffffff',
+  uiGold: '#fbf236',
+  uiRed: '#ac3232',
+  uiGreen: '#6abe30',
+
+  // Player colors (slightly desaturated for retro look)
+  player1: '#e83b3b',    // Red
+  player1Light: '#ff7777',
+  player1Dark: '#a82020',
+  player2: '#639bff',    // Blue
+  player2Light: '#99c0ff',
+  player2Dark: '#3b6ec0',
+  player3: '#6abe30',    // Green
+  player3Light: '#99e550',
+  player3Dark: '#4b8a2b',
+  player4: '#fbf236',    // Yellow
+  player4Light: '#ffff88',
+  player4Dark: '#c9b030',
+};
+
 // Direction enum
 export enum Direction {
   UP = 'up',

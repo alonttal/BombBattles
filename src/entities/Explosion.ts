@@ -1,5 +1,5 @@
 import { Entity } from './Entity';
-import { Direction, TILE_SIZE, EXPLOSION_DURATION, EXPLOSION_KILL_DURATION } from '../constants';
+import { Direction, TILE_SIZE, EXPLOSION_DURATION, EXPLOSION_KILL_DURATION, RETRO_PALETTE } from '../constants';
 import { BombType } from './Player';
 
 export interface ExplosionTile {
@@ -9,14 +9,121 @@ export interface ExplosionTile {
   isEnd: boolean;
 }
 
+// Explosion colors by type (stepped, no gradients)
+const EXPLOSION_COLORS = {
+  [BombType.NORMAL]: [
+    RETRO_PALETTE.fireWhite,
+    RETRO_PALETTE.fireYellow,
+    RETRO_PALETTE.fireOrange,
+    RETRO_PALETTE.fireRed,
+  ],
+  [BombType.FIRE]: [
+    RETRO_PALETTE.fireWhite,
+    RETRO_PALETTE.fireYellow,
+    RETRO_PALETTE.fireOrange,
+    RETRO_PALETTE.fireRed,
+  ],
+  [BombType.ICE]: [
+    RETRO_PALETTE.iceWhite,
+    RETRO_PALETTE.iceCyan,
+    RETRO_PALETTE.iceBlue,
+    RETRO_PALETTE.iceDark,
+  ],
+  [BombType.PIERCING]: [
+    RETRO_PALETTE.magicWhite,
+    RETRO_PALETTE.magicPink,
+    RETRO_PALETTE.magicPurple,
+    RETRO_PALETTE.magicDark,
+  ],
+};
+
+// Center explosion sprite (12x12 pixels)
+const CENTER_SPRITE = [
+  '....WWWW....',
+  '..WWYYYYWW..',
+  '.WYYOOOOYYYW',
+  '.WYOORRROOYYW',
+  'WYOORRRRROOYW',
+  'WYOORRRRROOYW',
+  'WYOORRRRROOYW',
+  'WYOORRRRROOYW',
+  '.WYOORRROOYYW',
+  '.WYYOOOOYYYW',
+  '..WWYYYYWW..',
+  '....WWWW....',
+];
+
+// Horizontal flame sprite (12x6 pixels, stretched across tile)
+const FLAME_H_SPRITE = [
+  'WWWWWWWWWWWW',
+  'YYYYYYYYYYYW',
+  'OOOOOOOOOOYYW',
+  'OOOOOOOOOOYYW',
+  'YYYYYYYYYYYW',
+  'WWWWWWWWWWWW',
+];
+
+// Vertical flame sprite (6x12 pixels)
+const FLAME_V_SPRITE = [
+  'WYOOYW',
+  'WYOOYW',
+  'WYOOYW',
+  'WYOOYW',
+  'WYOOYW',
+  'WYOOYW',
+  'WYOOYW',
+  'WYOOYW',
+  'WYOOYW',
+  'WYOOYW',
+  'WYOOYW',
+  'WYOOYW',
+];
+
+// End cap sprites (triangular)
+const END_UP = [
+  '..WW..',
+  '.WYYAW',
+  'WYOOYW',
+  'WYOOYW',
+  'WYOOYW',
+  'WYOOYW',
+];
+
+const END_DOWN = [
+  'WYOOYW',
+  'WYOOYW',
+  'WYOOYW',
+  'WYOOYW',
+  '.WYYAW',
+  '..WW..',
+];
+
+const END_LEFT = [
+  '..WWWW',
+  '.WYYYY',
+  'WYOOOO',
+  'WYOOOO',
+  '.WYYYY',
+  '..WWWW',
+];
+
+const END_RIGHT = [
+  'WWWW..',
+  'YYYYW.',
+  'OOOOWY',
+  'OOOOWY',
+  'YYYYW.',
+  'WWWW..',
+];
+
 export class Explosion extends Entity {
   public readonly tiles: ExplosionTile[];
   public readonly bombType: BombType;
   private timer: number = EXPLOSION_DURATION;
   private maxTimer: number = EXPLOSION_DURATION;
+  private animFrame: number = 0;
 
   constructor(tiles: ExplosionTile[], bombType: BombType) {
-    // Use the center tile as the entity position
     const center = tiles.find(t => t.direction === 'center') || tiles[0];
     super(center.gridX, center.gridY);
     this.tiles = tiles;
@@ -25,6 +132,8 @@ export class Explosion extends Entity {
 
   update(deltaTime: number): void {
     this.timer -= deltaTime;
+    // 4-frame animation cycling
+    this.animFrame = Math.floor((1 - this.timer / this.maxTimer) * 8) % 4;
     if (this.timer <= 0) {
       this.destroy();
     }
@@ -32,182 +141,201 @@ export class Explosion extends Entity {
 
   render(ctx: CanvasRenderingContext2D, _interpolation: number): void {
     const progress = 1 - (this.timer / this.maxTimer);
-    const alpha = progress < 0.5 ? 1 : 1 - (progress - 0.5) * 2;
+    // Stepped alpha fade (3 levels instead of smooth)
+    let alpha = 1;
+    if (progress > 0.7) alpha = 0.6;
+    if (progress > 0.85) alpha = 0.3;
 
     ctx.globalAlpha = alpha;
 
     for (const tile of this.tiles) {
-      this.renderTile(ctx, tile, progress);
+      this.renderPixelTile(ctx, tile, progress);
     }
 
     ctx.globalAlpha = 1;
   }
 
-  private renderTile(ctx: CanvasRenderingContext2D, tile: ExplosionTile, progress: number): void {
-    const x = tile.gridX * TILE_SIZE;
-    const y = tile.gridY * TILE_SIZE;
+  private renderPixelTile(ctx: CanvasRenderingContext2D, tile: ExplosionTile, progress: number): void {
+    const x = Math.floor(tile.gridX * TILE_SIZE);
+    const y = Math.floor(tile.gridY * TILE_SIZE);
+    const pixelSize = 4;
 
-    // Get explosion colors based on bomb type
-    const colors = this.getExplosionColors();
+    const colors = EXPLOSION_COLORS[this.bombType];
+    // Cycle through colors based on animation frame for flicker effect
+    const colorShift = this.animFrame;
 
-    // Explosion grows then shrinks (more dramatic)
-    const scale = progress < 0.2 ? progress / 0.2 : 1 - (progress - 0.2) * 0.4;
-    const size = TILE_SIZE * Math.max(0.3, scale);
-    const offset = (TILE_SIZE - size) / 2;
+    const palette: Record<string, string> = {
+      'W': colors[(0 + colorShift) % 4], // White/brightest
+      'Y': colors[(1 + colorShift) % 4], // Yellow/secondary
+      'O': colors[(2 + colorShift) % 4], // Orange/tertiary
+      'R': colors[(3 + colorShift) % 4], // Red/darkest
+      'A': colors[(0 + colorShift) % 4], // Accent (same as white)
+    };
 
-    // Animated wave for jagged fire effect
-    const waveOffset = Math.sin(progress * Math.PI * 6) * 3;
+    // Scale based on progress (grows then shrinks in discrete steps)
+    let scale = 1.0;
+    if (progress < 0.15) scale = 0.6;
+    else if (progress < 0.3) scale = 0.85;
+    else if (progress > 0.8) scale = 0.7;
 
-    // Outer glow
-    ctx.shadowColor = colors.outer;
-    ctx.shadowBlur = 20 * scale;
-
-    // Draw explosion
     if (tile.direction === 'center') {
-      // 1. Shockwave ring (fast expansion)
-      if (progress < 0.4) {
-        ctx.save();
-        const swProgress = progress / 0.4;
-        ctx.strokeStyle = colors.inner;
-        ctx.lineWidth = 3 * (1 - swProgress);
-        ctx.globalAlpha = (1 - swProgress) * 0.4;
-        ctx.beginPath();
-        ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, TILE_SIZE * (0.5 + swProgress * 1.5), 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.restore();
-      }
-
-      // 2. Multi-layered pulsing core
-      const coreGradient = ctx.createRadialGradient(
-        x + TILE_SIZE / 2, y + TILE_SIZE / 2, 0,
-        x + TILE_SIZE / 2, y + TILE_SIZE / 2, size / 2 + 6
-      );
-      coreGradient.addColorStop(0, '#ffffff');
-      coreGradient.addColorStop(0.15, colors.inner);
-      coreGradient.addColorStop(0.4, colors.middle);
-      coreGradient.addColorStop(0.7, colors.outer);
-      coreGradient.addColorStop(1, 'transparent');
-
-      ctx.fillStyle = coreGradient;
-      ctx.beginPath();
-      ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, size / 2 + 5, 0, Math.PI * 2);
-      ctx.fill();
-
-      // 3. Hot white center (jittering slightly)
-      const jitterX = (Math.random() - 0.5) * 2;
-      const jitterY = (Math.random() - 0.5) * 2;
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(x + TILE_SIZE / 2 + jitterX, y + TILE_SIZE / 2 + jitterY, size * 0.18, 0, Math.PI * 2);
-      ctx.fill();
-
+      this.drawCenterExplosion(ctx, x, y, pixelSize, scale, palette);
+    } else if (tile.isEnd) {
+      this.drawEndCap(ctx, x, y, pixelSize, scale, palette, tile.direction as Direction);
     } else {
-      // Directional flames with jagged edges
-      const isHorizontal = tile.direction === Direction.LEFT || tile.direction === Direction.RIGHT;
-
-      // Create jagged flame path
-      ctx.beginPath();
-
-      if (isHorizontal) {
-        const flameTop = y + offset - waveOffset;
-        const flameBottom = y + TILE_SIZE - offset + waveOffset;
-        const flameMid = y + TILE_SIZE / 2;
-
-        ctx.moveTo(x, flameMid);
-        for (let i = 0; i <= TILE_SIZE; i += 8) {
-          const waveY = flameTop + Math.sin((i + progress * 200) * 0.4) * 4;
-          ctx.lineTo(x + i, waveY);
-        }
-        for (let i = TILE_SIZE; i >= 0; i -= 8) {
-          const waveY = flameBottom + Math.sin((i + progress * 200) * 0.4) * 4;
-          ctx.lineTo(x + i, waveY);
-        }
-        ctx.closePath();
-
-        // Gradient fill
-        const gradient = ctx.createLinearGradient(x, flameTop, x, flameBottom);
-        gradient.addColorStop(0, colors.outer);
-        gradient.addColorStop(0.3, colors.middle);
-        gradient.addColorStop(0.5, colors.inner);
-        gradient.addColorStop(0.7, colors.middle);
-        gradient.addColorStop(1, colors.outer);
-        ctx.fillStyle = gradient;
-        ctx.fill();
-
-        // Extra "Heat" layer in the middle
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-        ctx.fillRect(x, flameMid - size * 0.05, TILE_SIZE, size * 0.1);
-
-      } else {
-        const flameLeft = x + offset - waveOffset;
-        const flameRight = x + TILE_SIZE - offset + waveOffset;
-        const flameMid = x + TILE_SIZE / 2;
-
-        ctx.moveTo(flameMid, y);
-        for (let i = 0; i <= TILE_SIZE; i += 8) {
-          const waveX = flameRight + Math.sin((i + progress * 200) * 0.4) * 4;
-          ctx.lineTo(waveX, y + i);
-        }
-        for (let i = TILE_SIZE; i >= 0; i -= 8) {
-          const waveX = flameLeft + Math.sin((i + progress * 200) * 0.4) * 4;
-          ctx.lineTo(waveX, y + i);
-        }
-        ctx.closePath();
-
-        const gradient = ctx.createLinearGradient(flameLeft, y, flameRight, y);
-        gradient.addColorStop(0, colors.outer);
-        gradient.addColorStop(0.3, colors.middle);
-        gradient.addColorStop(0.5, colors.inner);
-        gradient.addColorStop(0.7, colors.middle);
-        gradient.addColorStop(1, colors.outer);
-        ctx.fillStyle = gradient;
-        ctx.fill();
-
-        // Extra "Heat" layer in the middle
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-        ctx.fillRect(flameMid - size * 0.05, y, size * 0.1, TILE_SIZE);
-      }
-
-      // End cap with glow
-      if (tile.isEnd) {
-        const capGradient = ctx.createRadialGradient(0, 0, 0, 0, 0, size / 2);
-        capGradient.addColorStop(0, colors.inner);
-        capGradient.addColorStop(0.5, colors.middle);
-        capGradient.addColorStop(1, 'transparent');
-
-        ctx.save();
-        if (tile.direction === Direction.UP) {
-          ctx.translate(x + TILE_SIZE / 2, y + size / 2);
-        } else if (tile.direction === Direction.DOWN) {
-          ctx.translate(x + TILE_SIZE / 2, y + TILE_SIZE - size / 2);
-        } else if (tile.direction === Direction.LEFT) {
-          ctx.translate(x + size / 2, y + TILE_SIZE / 2);
-        } else {
-          ctx.translate(x + TILE_SIZE - size / 2, y + TILE_SIZE / 2);
-        }
-
-        ctx.fillStyle = capGradient;
-        ctx.beginPath();
-        ctx.arc(0, 0, size / 2, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-      }
+      this.drawFlame(ctx, x, y, pixelSize, scale, palette, tile.direction as Direction);
     }
-
-    ctx.shadowBlur = 0;
   }
 
-  private getExplosionColors(): { inner: string; middle: string; outer: string } {
-    switch (this.bombType) {
-      case BombType.ICE:
-        return { inner: '#ffffff', middle: '#00ffff', outer: '#0088ff' };
-      case BombType.FIRE:
-        return { inner: '#ffffff', middle: '#ff4400', outer: '#880000' };
-      case BombType.PIERCING:
-        return { inner: '#ffffff', middle: '#ff00ff', outer: '#8800ff' };
-      default:
-        return { inner: '#ffffff', middle: '#ff6600', outer: '#ff0000' };
+  private drawCenterExplosion(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    pixelSize: number,
+    scale: number,
+    palette: Record<string, string>
+  ): void {
+    const sprite = CENTER_SPRITE;
+    const spriteSize = 12 * pixelSize * scale;
+    const offsetX = x + (TILE_SIZE - spriteSize) / 2;
+    const offsetY = y + (TILE_SIZE - spriteSize) / 2;
+
+    for (let py = 0; py < sprite.length; py++) {
+      const row = sprite[py];
+      for (let px = 0; px < row.length; px++) {
+        const char = row[px];
+        if (char === '.') continue;
+        const color = palette[char];
+        if (!color) continue;
+
+        ctx.fillStyle = color;
+        ctx.fillRect(
+          Math.floor(offsetX + px * pixelSize * scale),
+          Math.floor(offsetY + py * pixelSize * scale),
+          Math.ceil(pixelSize * scale),
+          Math.ceil(pixelSize * scale)
+        );
+      }
     }
+  }
+
+  private drawFlame(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    pixelSize: number,
+    scale: number,
+    palette: Record<string, string>,
+    direction: Direction
+  ): void {
+    const isHorizontal = direction === Direction.LEFT || direction === Direction.RIGHT;
+    const sprite = isHorizontal ? FLAME_H_SPRITE : FLAME_V_SPRITE;
+
+    if (isHorizontal) {
+      // Stretch horizontally to fill tile
+      const spriteH = 6 * pixelSize * scale;
+      const offsetY = y + (TILE_SIZE - spriteH) / 2;
+
+      for (let py = 0; py < sprite.length; py++) {
+        const row = sprite[py];
+        for (let px = 0; px < row.length; px++) {
+          const char = row[px];
+          if (char === '.') continue;
+          const color = palette[char];
+          if (!color) continue;
+
+          ctx.fillStyle = color;
+          ctx.fillRect(
+            Math.floor(x + px * pixelSize),
+            Math.floor(offsetY + py * pixelSize * scale),
+            pixelSize,
+            Math.ceil(pixelSize * scale)
+          );
+        }
+      }
+    } else {
+      // Stretch vertically to fill tile
+      const spriteW = 6 * pixelSize * scale;
+      const offsetX = x + (TILE_SIZE - spriteW) / 2;
+
+      for (let py = 0; py < sprite.length; py++) {
+        const row = sprite[py];
+        for (let px = 0; px < row.length; px++) {
+          const char = row[px];
+          if (char === '.') continue;
+          const color = palette[char];
+          if (!color) continue;
+
+          ctx.fillStyle = color;
+          ctx.fillRect(
+            Math.floor(offsetX + px * pixelSize * scale),
+            Math.floor(y + py * pixelSize),
+            Math.ceil(pixelSize * scale),
+            pixelSize
+          );
+        }
+      }
+    }
+  }
+
+  private drawEndCap(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    pixelSize: number,
+    scale: number,
+    palette: Record<string, string>,
+    direction: Direction
+  ): void {
+    let sprite: string[];
+    let offsetX = x;
+    let offsetY = y;
+
+    switch (direction) {
+      case Direction.UP:
+        sprite = END_UP;
+        offsetX = x + (TILE_SIZE - 6 * pixelSize * scale) / 2;
+        offsetY = y;
+        break;
+      case Direction.DOWN:
+        sprite = END_DOWN;
+        offsetX = x + (TILE_SIZE - 6 * pixelSize * scale) / 2;
+        offsetY = y + TILE_SIZE - 6 * pixelSize * scale;
+        break;
+      case Direction.LEFT:
+        sprite = END_LEFT;
+        offsetX = x;
+        offsetY = y + (TILE_SIZE - 6 * pixelSize * scale) / 2;
+        break;
+      case Direction.RIGHT:
+        sprite = END_RIGHT;
+        offsetX = x + TILE_SIZE - 6 * pixelSize * scale;
+        offsetY = y + (TILE_SIZE - 6 * pixelSize * scale) / 2;
+        break;
+      default:
+        return;
+    }
+
+    for (let py = 0; py < sprite.length; py++) {
+      const row = sprite[py];
+      for (let px = 0; px < row.length; px++) {
+        const char = row[px];
+        if (char === '.') continue;
+        const color = palette[char];
+        if (!color) continue;
+
+        ctx.fillStyle = color;
+        ctx.fillRect(
+          Math.floor(offsetX + px * pixelSize * scale),
+          Math.floor(offsetY + py * pixelSize * scale),
+          Math.ceil(pixelSize * scale),
+          Math.ceil(pixelSize * scale)
+        );
+      }
+    }
+
+    // Also draw the flame body leading up to the end cap
+    this.drawFlame(ctx, x, y, pixelSize, scale, palette, direction);
   }
 
   getProgress(): number {

@@ -1,3 +1,5 @@
+import { RETRO_PALETTE } from '../constants';
+
 interface Particle {
   x: number;
   y: number;
@@ -11,7 +13,7 @@ interface Particle {
   friction: number;
   rotation: number;
   rotationSpeed: number;
-  shape: 'circle' | 'square' | 'spark' | 'text' | 'ring';
+  shape: 'circle' | 'square' | 'spark' | 'text' | 'ring' | 'pixel' | 'pixelStar' | 'pixelCross';
   text?: string;
 }
 
@@ -27,96 +29,96 @@ export interface ParticleConfig {
   colors: string[];
   gravity?: number;
   friction?: number;
-  shape?: 'circle' | 'square' | 'spark' | 'text' | 'ring';
+  shape?: 'circle' | 'square' | 'spark' | 'text' | 'ring' | 'pixel' | 'pixelStar' | 'pixelCross';
   text?: string;
 }
 
-// Preset configurations
+// Preset configurations (using RETRO_PALETTE colors and pixel shapes)
 export const PARTICLE_PRESETS = {
   explosion: {
-    count: 40,
+    count: 30,
     spread: 8,
     speed: { min: 100, max: 300 },
     lifetime: { min: 0.3, max: 0.8 },
-    size: { min: 3, max: 8 },
-    colors: ['#ff4400', '#ff8800', '#ffcc00', '#ffffff'],
+    size: { min: 4, max: 8 },
+    colors: [RETRO_PALETTE.fireWhite, RETRO_PALETTE.fireYellow, RETRO_PALETTE.fireOrange, RETRO_PALETTE.fireRed],
     gravity: 200,
     friction: 0.95,
-    shape: 'circle' as const
+    shape: 'pixel' as const
   },
 
   explosionSparks: {
-    count: 20,
+    count: 15,
     spread: 4,
     speed: { min: 200, max: 400 },
     lifetime: { min: 0.2, max: 0.5 },
-    size: { min: 2, max: 4 },
-    colors: ['#ffff00', '#ffffff', '#ff8800'],
+    size: { min: 4, max: 6 },
+    colors: [RETRO_PALETTE.fireYellow, RETRO_PALETTE.fireWhite, RETRO_PALETTE.fireOrange],
     gravity: 100,
     friction: 0.98,
-    shape: 'spark' as const
+    shape: 'pixelCross' as const
   },
 
   iceExplosion: {
-    count: 35,
+    count: 25,
     spread: 8,
     speed: { min: 80, max: 250 },
     lifetime: { min: 0.4, max: 1.0 },
-    size: { min: 3, max: 7 },
-    colors: ['#00ffff', '#88ffff', '#ffffff', '#0088ff'],
+    size: { min: 4, max: 8 },
+    colors: [RETRO_PALETTE.iceWhite, RETRO_PALETTE.iceCyan, RETRO_PALETTE.iceBlue],
     gravity: 50,
     friction: 0.92,
-    shape: 'square' as const
+    shape: 'pixel' as const
   },
 
   fireExplosion: {
-    count: 50,
+    count: 35,
     spread: 10,
     speed: { min: 60, max: 200 },
     lifetime: { min: 0.5, max: 1.2 },
     size: { min: 4, max: 10 },
-    colors: ['#ff0000', '#ff4400', '#ff8800', '#ffcc00'],
+    colors: [RETRO_PALETTE.fireRed, RETRO_PALETTE.fireOrange, RETRO_PALETTE.fireYellow],
     gravity: -50, // Fire rises
     friction: 0.94,
-    shape: 'circle' as const
+    shape: 'pixel' as const
   },
 
   debris: {
-    count: 12,
+    count: 10,
     spread: 4,
     speed: { min: 150, max: 350 },
     angle: { min: -Math.PI * 0.8, max: -Math.PI * 0.2 }, // Mostly upward
     lifetime: { min: 0.4, max: 0.8 },
     size: { min: 4, max: 8 },
-    colors: ['#8B4513', '#A0522D', '#654321', '#D2691E'],
+    colors: [RETRO_PALETTE.woodLight, RETRO_PALETTE.woodMid, RETRO_PALETTE.woodDark],
     gravity: 600,
     friction: 0.99,
-    shape: 'square' as const
+    shape: 'pixel' as const
   },
 
   powerUpCollect: {
-    count: 15,
+    count: 12,
     spread: 2,
     speed: { min: 50, max: 150 },
     angle: { min: -Math.PI, max: 0 }, // Upward
     lifetime: { min: 0.3, max: 0.6 },
-    size: { min: 3, max: 6 },
-    colors: ['#ffffff', '#ffff00', '#00ff00'],
+    size: { min: 4, max: 8 },
+    colors: [RETRO_PALETTE.uiWhite, RETRO_PALETTE.uiGold, RETRO_PALETTE.uiGreen],
     gravity: -100,
     friction: 0.95,
-    shape: 'circle' as const
+    shape: 'pixelStar' as const
   },
 
   death: {
-    count: 30,
+    count: 25,
     spread: 10,
     speed: { min: 100, max: 250 },
     lifetime: { min: 0.5, max: 1.0 },
     size: { min: 4, max: 10 },
-    colors: ['#ff0000', '#880000', '#440000', '#ffffff'],
+    colors: [RETRO_PALETTE.fireRed, RETRO_PALETTE.uiRed, RETRO_PALETTE.uiWhite],
     gravity: 150,
     friction: 0.96,
-    shape: 'circle' as const
+    shape: 'pixel' as const
   },
 
   smoke: {
@@ -473,9 +475,21 @@ export class ParticleSystem {
     ctx.save();
 
     for (const p of this.particles) {
-      const alpha = Math.max(0, p.life / p.maxLife);
-      const scale = 0.5 + (p.life / p.maxLife) * 0.5;
-      const size = p.size * scale;
+      const lifeRatio = p.life / p.maxLife;
+
+      // Discrete alpha levels (3 steps instead of smooth)
+      let alpha: number;
+      if (lifeRatio > 0.66) alpha = 1.0;
+      else if (lifeRatio > 0.33) alpha = 0.6;
+      else alpha = 0.3;
+
+      // Discrete size scaling (2 steps)
+      const scale = lifeRatio > 0.5 ? 1.0 : 0.7;
+      const size = Math.floor(p.size * scale);
+
+      // Snap positions to integers for pixel-perfect rendering
+      const px = Math.floor(p.x);
+      const py = Math.floor(p.y);
 
       ctx.globalAlpha = alpha;
       ctx.fillStyle = p.color;
@@ -483,13 +497,13 @@ export class ParticleSystem {
       switch (p.shape) {
         case 'circle':
           ctx.beginPath();
-          ctx.arc(p.x, p.y, size / 2, 0, Math.PI * 2);
+          ctx.arc(px, py, size / 2, 0, Math.PI * 2);
           ctx.fill();
           break;
 
         case 'square':
           ctx.save();
-          ctx.translate(p.x, p.y);
+          ctx.translate(px, py);
           ctx.rotate(p.rotation);
           ctx.fillRect(-size / 2, -size / 2, size, size);
           ctx.restore();
@@ -497,7 +511,7 @@ export class ParticleSystem {
 
         case 'spark':
           ctx.save();
-          ctx.translate(p.x, p.y);
+          ctx.translate(px, py);
           ctx.rotate(Math.atan2(p.vy, p.vx));
           ctx.fillRect(-size, -size / 4, size * 2, size / 2);
           ctx.restore();
@@ -510,20 +524,45 @@ export class ParticleSystem {
             ctx.textBaseline = 'middle';
             ctx.strokeStyle = '#000000';
             ctx.lineWidth = 3;
-            ctx.strokeText(p.text, p.x, p.y);
-            ctx.fillText(p.text, p.x, p.y);
+            ctx.strokeText(p.text, px, py);
+            ctx.fillText(p.text, px, py);
           }
           break;
 
         case 'ring':
           ctx.beginPath();
-          // Expanding ring effect
-          const ringScale = 2 - alpha; // Grows as it dies
-          const ringSize = size * ringScale;
-          ctx.arc(p.x, p.y, ringSize / 2, 0, Math.PI * 2);
+          // Expanding ring effect (discrete steps)
+          const ringStep = lifeRatio > 0.5 ? 1.0 : 1.5;
+          const ringSize = size * ringStep;
+          ctx.arc(px, py, ringSize / 2, 0, Math.PI * 2);
           ctx.strokeStyle = p.color;
-          ctx.lineWidth = 10 * alpha;
+          ctx.lineWidth = Math.floor(8 * alpha);
           ctx.stroke();
+          break;
+
+        case 'pixel':
+          // Simple 2x2 or 3x3 pixel square
+          const pixelSize = Math.max(2, Math.floor(size / 2)) * 2;
+          ctx.fillRect(px - pixelSize / 2, py - pixelSize / 2, pixelSize, pixelSize);
+          break;
+
+        case 'pixelStar':
+          // 5-point pixel star (simple cross + corners)
+          const starSize = Math.max(2, Math.floor(size / 2));
+          // Center
+          ctx.fillRect(px - starSize / 2, py - starSize / 2, starSize, starSize);
+          // Arms
+          ctx.fillRect(px - starSize * 1.5, py - 1, starSize, 2);
+          ctx.fillRect(px + starSize / 2, py - 1, starSize, 2);
+          ctx.fillRect(px - 1, py - starSize * 1.5, 2, starSize);
+          ctx.fillRect(px - 1, py + starSize / 2, 2, starSize);
+          break;
+
+        case 'pixelCross':
+          // Simple + shape
+          const crossSize = Math.max(2, Math.floor(size / 2));
+          ctx.fillRect(px - crossSize, py - 1, crossSize * 2, 2);
+          ctx.fillRect(px - 1, py - crossSize, 2, crossSize * 2);
           break;
       }
     }

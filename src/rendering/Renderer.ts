@@ -1,4 +1,4 @@
-import { CANVAS_WIDTH, CANVAS_HEIGHT, TILE_SIZE, GRID_WIDTH, GRID_HEIGHT, COLORS } from '../constants';
+import { CANVAS_WIDTH, CANVAS_HEIGHT, TILE_SIZE, GRID_WIDTH, GRID_HEIGHT, RETRO_PALETTE } from '../constants';
 import { Player, BombType } from '../entities/Player';
 import { Bomb } from '../entities/Bomb';
 import { Block } from '../entities/Block';
@@ -8,6 +8,7 @@ import { FloatingText } from './FloatingText';
 import { ScoreManager } from '../core/ScoreManager';
 import { ParticleSystem } from './ParticleSystem';
 import { Camera } from './Camera';
+import { PixelFont } from './PixelFont';
 
 export interface RenderState {
   players: Player[];
@@ -210,15 +211,8 @@ export class Renderer {
     this.ctx.save();
     this.ctx.scale(this.scale, this.scale);
 
-    // Clear canvas with bright gradient background
-    const gradient = this.ctx.createRadialGradient(
-      CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, 0,
-      CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, Math.max(CANVAS_WIDTH, CANVAS_HEIGHT) * 0.7
-    );
-    gradient.addColorStop(0, '#87CEEB'); // Sky blue center
-    gradient.addColorStop(0.5, '#6BB6D6'); // Medium blue
-    gradient.addColorStop(1, '#4A9EC1'); // Deeper blue edge
-    this.ctx.fillStyle = gradient;
+    // Clear canvas with solid retro sky color
+    this.ctx.fillStyle = RETRO_PALETTE.skyMid;
     this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
     // Apply camera transform
@@ -302,98 +296,214 @@ export class Renderer {
     return this.camera;
   }
 
-  // NEW: Render drifting clouds
+  // Pixel cloud sprites
+  private static readonly CLOUD_SPRITE = [
+    '....LLLL....',
+    '..LLHHHHLL..',
+    '.LHHHHHHHHH.',
+    'LHHHHHHHHHHL',
+    'LHHHHHHHHHHL',
+    '.LHHHHHHHHH.',
+    '..LLLLLLLL..',
+  ];
+
+  // NEW: Render drifting pixel clouds
   private renderClouds(): void {
     const ctx = this.ctx;
-    ctx.save();
 
     for (const cloud of this.clouds) {
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-      ctx.beginPath();
-      // Draw cloud as multiple overlapping circles
-      ctx.arc(cloud.x, cloud.y, cloud.size * 0.6, 0, Math.PI * 2);
-      ctx.arc(cloud.x + cloud.size * 0.5, cloud.y, cloud.size * 0.5, 0, Math.PI * 2);
-      ctx.arc(cloud.x - cloud.size * 0.5, cloud.y, cloud.size * 0.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
+      // Discrete movement - snap to 2px increments
+      const x = Math.floor(cloud.x / 2) * 2;
+      const y = Math.floor(cloud.y);
+      const pixelSize = Math.floor(cloud.size / 12);
 
-    ctx.restore();
+      const sprite = Renderer.CLOUD_SPRITE;
+
+      for (let py = 0; py < sprite.length; py++) {
+        const row = sprite[py];
+        for (let px = 0; px < row.length; px++) {
+          const char = row[px];
+          if (char === '.') continue;
+
+          // L = light shade, H = highlight (white)
+          if (char === 'L') {
+            ctx.fillStyle = 'rgba(200, 220, 255, 0.25)';
+          } else {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+          }
+
+          ctx.fillRect(
+            Math.floor(x + px * pixelSize),
+            Math.floor(y + py * pixelSize),
+            pixelSize,
+            pixelSize
+          );
+        }
+      }
+    }
   }
+
+  // 4 grass tile patterns (12x12 pixel sprites)
+  private static readonly GRASS_TILES = [
+    // Tile 0: Plain light
+    [
+      'LLLLLLLLLLLL',
+      'LLLLLLLLLLLL',
+      'LLLLLLLLLLLL',
+      'LLLLLLLLLLLL',
+      'LLLLLLLLLLLL',
+      'LLLLLLLLLLLL',
+      'LLLLLLLLLLLL',
+      'LLLLLLLLLLLL',
+      'LLLLLLLLLLLL',
+      'LLLLLLLLLLLL',
+      'LLLLLLLLLLLL',
+      'LLLLLLLLLLLL',
+    ],
+    // Tile 1: Plain dark
+    [
+      'DDDDDDDDDDDD',
+      'DDDDDDDDDDDD',
+      'DDDDDDDDDDDD',
+      'DDDDDDDDDDDD',
+      'DDDDDDDDDDDD',
+      'DDDDDDDDDDDD',
+      'DDDDDDDDDDDD',
+      'DDDDDDDDDDDD',
+      'DDDDDDDDDDDD',
+      'DDDDDDDDDDDD',
+      'DDDDDDDDDDDD',
+      'DDDDDDDDDDDD',
+    ],
+    // Tile 2: Light with grass detail
+    [
+      'LLLLLLLLLLLL',
+      'LLHLLLLLHLLL',
+      'LLLLLLLLLLLL',
+      'LLLLLLLLLLLL',
+      'LLLLLHLLLLLL',
+      'LLLLLLLLLLLL',
+      'LLLLLLLLLLLL',
+      'LLHLLLLLLLLL',
+      'LLLLLLLLLLLL',
+      'LLLLLLHLLLLL',
+      'LLLLLLLLLLLL',
+      'LLLLLLLLLLLL',
+    ],
+    // Tile 3: Dark with grass detail
+    [
+      'DDDDDDDDDDDD',
+      'DDDDDDDDHDDD',
+      'DDDDDDDDDDDD',
+      'DDHDDDDDDDDD',
+      'DDDDDDDDDDDD',
+      'DDDDDDDDDDDD',
+      'DDDDDDHDDDDD',
+      'DDDDDDDDDDDD',
+      'DDDDDDDDDDDD',
+      'DDDDDDDDDDDD',
+      'DDHDDDDDDDDD',
+      'DDDDDDDDDDDD',
+    ],
+  ];
+
+  // Small pixel decorations (3x3)
+  private static readonly FLOWER_SPRITE = [
+    '.W.',
+    'WYW',
+    '.W.',
+  ];
+
+  private static readonly CLOVER_SPRITE = [
+    '.H.',
+    'HHH',
+    '.H.',
+  ];
 
   private renderGround(): void {
     const ctx = this.ctx;
-    // Draw enhanced grass tiles with depth and organic texture
+    const pixelSize = 4; // 12 * 4 = 48 (TILE_SIZE)
+
+    const grassPalette: Record<string, string> = {
+      'L': RETRO_PALETTE.grassLight,
+      'D': RETRO_PALETTE.grassDark,
+      'H': RETRO_PALETTE.grassHighlight,
+    };
+
+    // Draw pixel grass tiles (checkerboard pattern)
     for (let y = 0; y < GRID_HEIGHT; y++) {
       for (let x = 0; x < GRID_WIDTH; x++) {
-        const isLight = (x + y) % 2 === 0;
         const px = x * TILE_SIZE;
         const py = y * TILE_SIZE;
-
-        // Base gradient for 3D depth
-        const gradient = ctx.createLinearGradient(px, py, px + TILE_SIZE, py + TILE_SIZE);
-        if (isLight) {
-          gradient.addColorStop(0, '#8AE35F'); // Lighter green
-          gradient.addColorStop(0.5, '#7FD957');
-          gradient.addColorStop(1, '#6DC94D'); // Slightly darker
-        } else {
-          gradient.addColorStop(0, '#75CF52');
-          gradient.addColorStop(0.5, '#6BBF59');
-          gradient.addColorStop(1, '#5DAF4B');
-        }
-        ctx.fillStyle = gradient;
-        ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-
-        // Seeded random based on tile position for consistent patterns
         const seed = x * 17 + y * 31;
 
-        // Grass blade details (small vertical strokes) - NEW: with wave animation
-        ctx.strokeStyle = 'rgba(0, 80, 0, 0.15)';
-        ctx.lineWidth = 1;
-        for (let i = 0; i < 5; i++) {
-          const bladeX = px + ((seed * (i + 1) * 7) % (TILE_SIZE - 4)) + 2;
-          const bladeY = py + ((seed * (i + 2) * 11) % (TILE_SIZE - 8)) + 4;
+        // Checkerboard pattern with detail variation
+        const isLight = (x + y) % 2 === 0;
+        const hasDetail = seed % 3 === 0;
+        let tileIndex: number;
 
-          // NEW: Add wave animation (different speed for each blade for organic feel)
-          const waveSpeed = 1.5 + (seed % 3) * 0.5; // Vary wave speed
-          const waveOffset = Math.sin(this.grassWaveTime * waveSpeed + seed * 0.1) * 1.5;
-
-          ctx.beginPath();
-          ctx.moveTo(bladeX, bladeY + 4);
-          ctx.lineTo(bladeX + ((i % 2) ? 1 : -1) + waveOffset, bladeY);
-          ctx.stroke();
+        if (isLight) {
+          tileIndex = hasDetail ? 2 : 0;
+        } else {
+          tileIndex = hasDetail ? 3 : 1;
         }
 
-        // Light patches (sun spots)
-        if (seed % 7 === 0) {
-          ctx.fillStyle = 'rgba(255, 255, 200, 0.08)';
-          ctx.beginPath();
-          ctx.ellipse(px + 20 + (seed % 15), py + 15 + (seed % 12), 8, 6, 0, 0, Math.PI * 2);
-          ctx.fill();
-        }
+        const sprite = Renderer.GRASS_TILES[tileIndex];
 
-        // Small flowers/clovers (rare)
-        if (seed % 13 === 0) {
-          const flowerX = px + 10 + (seed % 25);
-          const flowerY = py + 10 + ((seed * 3) % 25);
-          // Flower center
-          ctx.fillStyle = seed % 2 === 0 ? '#FFE066' : '#FF9999';
-          ctx.beginPath();
-          ctx.arc(flowerX, flowerY, 2, 0, Math.PI * 2);
-          ctx.fill();
-          // Petals (simple dots around)
-          ctx.fillStyle = '#ffffff';
-          for (let p = 0; p < 4; p++) {
-            const angle = (p / 4) * Math.PI * 2;
-            ctx.beginPath();
-            ctx.arc(flowerX + Math.cos(angle) * 3, flowerY + Math.sin(angle) * 3, 1, 0, Math.PI * 2);
-            ctx.fill();
+        // Draw the tile
+        for (let sy = 0; sy < sprite.length; sy++) {
+          const row = sprite[sy];
+          for (let sx = 0; sx < row.length; sx++) {
+            const char = row[sx];
+            const color = grassPalette[char];
+            if (!color) continue;
+
+            ctx.fillStyle = color;
+            ctx.fillRect(
+              px + sx * pixelSize,
+              py + sy * pixelSize,
+              pixelSize,
+              pixelSize
+            );
           }
         }
 
-        // Subtle tile border shadow
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.06)';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
+        // Add small pixel decorations (rare)
+        if (seed % 13 === 0) {
+          const decX = px + 8 + (seed % 28);
+          const decY = py + 8 + ((seed * 3) % 28);
+          const isFlower = seed % 2 === 0;
+          const decoration = isFlower ? Renderer.FLOWER_SPRITE : Renderer.CLOVER_SPRITE;
+
+          const decPalette: Record<string, string> = {
+            'W': '#ffffff',
+            'Y': '#ffdd44',
+            'H': RETRO_PALETTE.grassHighlight,
+          };
+
+          for (let dy = 0; dy < decoration.length; dy++) {
+            const row = decoration[dy];
+            for (let dx = 0; dx < row.length; dx++) {
+              const char = row[dx];
+              if (char === '.') continue;
+              const color = decPalette[char];
+              if (!color) continue;
+
+              ctx.fillStyle = color;
+              ctx.fillRect(
+                Math.floor(decX + dx * 2),
+                Math.floor(decY + dy * 2),
+                2,
+                2
+              );
+            }
+          }
+        }
+
+        // Pixel tile border (shadow on bottom/right)
+        ctx.fillStyle = RETRO_PALETTE.grassShadow;
+        ctx.fillRect(px + TILE_SIZE - 1, py, 1, TILE_SIZE);
+        ctx.fillRect(px, py + TILE_SIZE - 1, TILE_SIZE, 1);
       }
     }
   }
@@ -401,7 +511,6 @@ export class Renderer {
   // UI Layout Constants (Compact)
   private readonly CARD_WIDTH = 130;
   private readonly CARD_HEIGHT = 40;
-  private readonly AVATAR_RADIUS = 18;
   private readonly UI_PADDING = 8;
 
   renderUI(alivePlayers: Player[], roundTime: number, scoreManager?: ScoreManager): void {
@@ -410,55 +519,50 @@ export class Renderer {
 
     // No full-width HUD gradient (it obscures the game)
 
-    // --- TIMER PANEL (Top Center, Compact) ---
+    // --- TIMER PANEL (Top Center, Pixel Style) ---
     const centerX = CANVAS_WIDTH / 2;
-    const timerWidth = 70;
-    const timerHeight = 28;
-    const timerX = centerX - timerWidth / 2;
+    const timerWidth = 80;
+    const timerHeight = 32;
+    const timerX = Math.floor(centerX - timerWidth / 2);
     const timerY = 5;
 
-    // Glass Panel Background
-    this.ctx.fillStyle = 'rgba(30, 30, 30, 0.6)';
-    this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-    this.ctx.lineWidth = 1;
-    this.ctx.beginPath();
-    this.ctx.roundRect(timerX, timerY, timerWidth, timerHeight, 12);
-    this.ctx.fill();
-    this.ctx.stroke();
+    // Pixel box background
+    this.ctx.fillStyle = RETRO_PALETTE.uiBlack;
+    this.ctx.fillRect(timerX, timerY, timerWidth, timerHeight);
 
-    // Timer Text (Digital Style)
+    // Warning: red flashing border
+    const isWarning = roundTime <= 30;
+    const borderFlash = isWarning && Math.floor(this.hudAnimationTimer * 8) % 2 === 0;
+    const borderColor = borderFlash ? RETRO_PALETTE.uiRed : RETRO_PALETTE.uiLight;
+
+    // Pixel border (2px)
+    this.ctx.fillStyle = borderColor;
+    this.ctx.fillRect(timerX, timerY, timerWidth, 2); // top
+    this.ctx.fillRect(timerX, timerY + timerHeight - 2, timerWidth, 2); // bottom
+    this.ctx.fillRect(timerX, timerY, 2, timerHeight); // left
+    this.ctx.fillRect(timerX + timerWidth - 2, timerY, 2, timerHeight); // right
+
+    // Timer Text (Pixel Font)
     const minutes = Math.floor(roundTime / 60);
     const seconds = Math.floor(roundTime % 60);
     const timeText = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    const textColor = isWarning ? RETRO_PALETTE.uiRed : RETRO_PALETTE.uiWhite;
 
-    this.ctx.font = '700 16px "Courier New", monospace';
-    this.ctx.textAlign = 'center';
-    this.ctx.textBaseline = 'middle';
+    PixelFont.drawTextCentered(this.ctx, timeText, centerX, timerY + 10, 2, textColor);
 
-    // Warning Glow & Wobble
-    if (roundTime <= 30) {
-      const wobble = Math.sin(this.hudAnimationTimer * 20) * 1.5;
-      this.ctx.save();
-      this.ctx.translate(wobble, 0);
-      this.ctx.shadowColor = '#ff2222';
-      this.ctx.shadowBlur = 15;
-      this.ctx.fillStyle = '#ff5555';
-    } else {
-      this.ctx.shadowBlur = 0;
-      this.ctx.fillStyle = '#ffffff';
-    }
-    this.ctx.fillText(timeText, centerX, timerY + timerHeight / 2 - 2);
-    this.ctx.shadowBlur = 0;
-    if (roundTime <= 30) {
-      this.ctx.restore();
-    }
-
-    // Progress Bar (Bottom of Timer)
-    const totalTime = 180; // Assuming 3 mins default round
+    // Progress Bar (discrete pixel blocks)
+    const totalTime = 180;
     const progress = Math.max(0, roundTime / totalTime);
-    const barWidth = (timerWidth - 20) * progress;
-    this.ctx.fillStyle = roundTime <= 30 ? '#ff5555' : '#44aaff';
-    this.ctx.fillRect(timerX + 10, timerY + timerHeight - 6, barWidth, 3);
+    const barX = timerX + 6;
+    const barY = timerY + timerHeight - 8;
+    const barMaxWidth = timerWidth - 12;
+    const blockSize = 4;
+    const numBlocks = Math.floor((barMaxWidth / blockSize) * progress);
+
+    for (let i = 0; i < numBlocks; i++) {
+      this.ctx.fillStyle = isWarning ? RETRO_PALETTE.uiRed : RETRO_PALETTE.skyDark;
+      this.ctx.fillRect(barX + i * blockSize, barY, blockSize - 1, 3);
+    }
 
 
     // --- PLAYER CARDS (4 Corners) ---
@@ -487,352 +591,183 @@ export class Renderer {
   private drawPlayerCard(x: number, y: number, player: Player, index: number, isAlive: boolean, scoreManager?: ScoreManager): void {
     const score = scoreManager ? scoreManager.getScore(index) : 0;
     if (score !== this.lastScores[index]) {
-      this.cardScorePulse[index] = 0.5; // Trigger pulse for 0.5s
+      this.cardScorePulse[index] = 0.5;
       this.lastScores[index] = score;
     }
 
-    const pulse = Math.sin(this.hudAnimationTimer * 3) * 0.015;
-    const scorePulse = this.cardScorePulse[index] > 0 ? Math.sin((this.cardScorePulse[index] / 0.5) * Math.PI) * 0.1 : 0;
-    const scale = 1 + pulse + scorePulse;
-
     const ctx = this.ctx;
-    ctx.save();
-    ctx.translate(x + this.CARD_WIDTH / 2, y + this.CARD_HEIGHT / 2);
-    ctx.scale(scale, scale);
-    ctx.translate(-this.CARD_WIDTH / 2, -this.CARD_HEIGHT / 2);
-
-    const colors = [COLORS.player1, COLORS.player2, COLORS.player3, COLORS.player4];
-    const playerColor = colors[index];
+    const retro_colors = [
+      RETRO_PALETTE.player1,
+      RETRO_PALETTE.player2,
+      RETRO_PALETTE.player3,
+      RETRO_PALETTE.player4
+    ];
+    const playerColor = retro_colors[index];
     const borderColor = isAlive ? playerColor : '#555555';
 
-    // 1. Card Background (Gradient)
-    const gradient = ctx.createLinearGradient(x, y, x + this.CARD_WIDTH, y);
-    if (index % 2 === 0) { // Left aligned
-      gradient.addColorStop(0, 'rgba(40, 40, 40, 0.9)');
-      gradient.addColorStop(1, 'rgba(40, 40, 40, 0.6)');
-    } else { // Right aligned
-      gradient.addColorStop(0, 'rgba(40, 40, 40, 0.6)');
-      gradient.addColorStop(1, 'rgba(40, 40, 40, 0.9)');
-    }
+    // Pixel card background (solid, no gradients)
+    ctx.fillStyle = RETRO_PALETTE.uiBlack;
+    ctx.fillRect(x, y, this.CARD_WIDTH, this.CARD_HEIGHT);
 
-    ctx.fillStyle = gradient;
-    ctx.strokeStyle = borderColor;
-    ctx.lineWidth = 2; // Thicker border for visibility
+    // 2px pixel border
+    ctx.fillStyle = borderColor;
+    ctx.fillRect(x, y, this.CARD_WIDTH, 2); // top
+    ctx.fillRect(x, y + this.CARD_HEIGHT - 2, this.CARD_WIDTH, 2); // bottom
+    ctx.fillRect(x, y, 2, this.CARD_HEIGHT); // left
+    ctx.fillRect(x + this.CARD_WIDTH - 2, y, 2, this.CARD_HEIGHT); // right
 
-    // Shadow
-    ctx.shadowColor = 'rgba(0,0,0,0.5)';
-    ctx.shadowBlur = 10;
-    ctx.shadowOffsetY = 4;
+    // Inner highlight (top-left)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.fillRect(x + 2, y + 2, this.CARD_WIDTH - 6, 1);
+    ctx.fillRect(x + 2, y + 2, 1, this.CARD_HEIGHT - 6);
 
-    ctx.beginPath();
-    ctx.roundRect(x, y, this.CARD_WIDTH, this.CARD_HEIGHT, 10);
-    ctx.fill();
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetY = 0;
-
-    // Inner glow effect
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.roundRect(x + 2, y + 2, this.CARD_WIDTH - 4, this.CARD_HEIGHT - 4, 8);
-    ctx.stroke();
-
-    // 2. Avatar (Inside card, not overlapping edge)
+    // Pixel avatar
     const isLeft = (index % 2 === 0);
-    // Avatar is now inside the card with padding
-    const avatarX = isLeft ? x + this.AVATAR_RADIUS + 4 : x + this.CARD_WIDTH - this.AVATAR_RADIUS - 4;
-    const avatarY = y + this.CARD_HEIGHT / 2;
+    const avatarX = isLeft ? x + 6 : x + this.CARD_WIDTH - 26;
+    const avatarY = y + 6;
+    this.drawPixelAvatar(avatarX, avatarY, 20, playerColor, isAlive);
 
-    this.drawAvatar(avatarX, avatarY, this.AVATAR_RADIUS, playerColor, isAlive, false);
-
-    // 3. Content Layout - Simplified for compact cards
     // Content starts after avatar
-    const contentX = isLeft ? x + this.AVATAR_RADIUS * 2 + 8 : x + 5;
-    const contentWidth = this.CARD_WIDTH - this.AVATAR_RADIUS * 2 - 12;
+    const contentX = isLeft ? x + 30 : x + 6;
 
     if (isAlive) {
-      // Single Row Layout: P# | Score | Bomb/Range
+      // Player ID with pixel font
+      PixelFont.drawText(ctx, `P${index + 1}`, contentX, y + 6, 1, playerColor);
 
-      // Player ID
-      ctx.fillStyle = playerColor;
-      ctx.font = 'bold 9px Arial';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(`P${index + 1}`, contentX, y + 12);
+      // Score with star icon (pixel)
+      ctx.fillStyle = RETRO_PALETTE.uiGold;
+      ctx.fillRect(contentX + 24, y + 6, 4, 4); // simple pixel star
+      ctx.fillRect(contentX + 22, y + 8, 8, 2);
+      ctx.fillRect(contentX + 24, y + 10, 4, 2);
 
-      // Star icon for score
-      ctx.fillStyle = '#FFD700';
-      ctx.font = '10px Arial';
-      ctx.fillText('★', contentX + 15, y + 12);
+      PixelFont.drawText(ctx, `${score}`, contentX + 34, y + 6, 1, RETRO_PALETTE.uiGold);
 
-      // Score (Gold, prominent)
-      ctx.font = 'bold 14px Arial';
-      ctx.textAlign = 'left';
-      const score = scoreManager ? scoreManager.getScore(index) : 0;
-      ctx.fillText(`${score}`, contentX + 26, y + 12);
+      // Stats row with pixel icons
+      const statsY = y + 22;
 
-      // Stats Row: Bomb icon + count, Blast icon + range
-      const statsY = y + 28;
+      // Bomb pixel icon (5x5)
+      this.drawPixelBombIcon(contentX, statsY, player.bombType);
+      PixelFont.drawText(ctx, `${player.maxBombs}`, contentX + 10, statsY, 1, RETRO_PALETTE.uiWhite);
 
-      // Bomb: Icon + Count
-      this.drawBombIcon(contentX + 2, statsY, 5, player.bombType);
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 9px Arial';
-      ctx.textAlign = 'left';
-      ctx.fillText(`${player.maxBombs}`, contentX + 12, statsY);
+      // Fire/range pixel icon
+      ctx.fillStyle = RETRO_PALETTE.fireOrange;
+      ctx.fillRect(contentX + 28, statsY + 1, 2, 5);
+      ctx.fillRect(contentX + 26, statsY + 2, 6, 3);
+      PixelFont.drawText(ctx, `${player.bombRange}`, contentX + 36, statsY, 1, RETRO_PALETTE.fireOrange);
 
-      // Blast: Icon + Range
-      this.drawBlastIcon(contentX + 35, statsY, 5);
-      ctx.fillStyle = '#ffaa00';
-      ctx.fillText(`${player.bombRange}`, contentX + 45, statsY);
-
-      // Ability indicator (Improved with actual icons)
-      const abilityX = contentX + 65;
+      // Ability indicator (pixel icons)
+      const abilityX = contentX + 54;
       if (player.hasShield()) {
-        this.drawAbilityIcon(abilityX, statsY, 'shield');
+        this.drawPixelAbilityIcon(abilityX, statsY, 'shield');
       } else if (player.canTeleport()) {
-        this.drawAbilityIcon(abilityX, statsY, 'teleport');
+        this.drawPixelAbilityIcon(abilityX, statsY, 'teleport');
       } else if (player.hasAbility('kick')) {
-        this.drawAbilityIcon(abilityX, statsY, 'kick');
+        this.drawPixelAbilityIcon(abilityX, statsY, 'kick');
       } else if (player.hasAbility('punch')) {
-        this.drawAbilityIcon(abilityX, statsY, 'punch');
+        this.drawPixelAbilityIcon(abilityX, statsY, 'punch');
       }
     } else {
-      // Dead State
-      ctx.fillStyle = '#666666';
-      ctx.font = 'italic 10px Arial';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText("OUT", contentX + contentWidth / 2, y + this.CARD_HEIGHT / 2);
+      // Dead state
+      PixelFont.drawTextCentered(ctx, 'OUT', x + this.CARD_WIDTH / 2, y + this.CARD_HEIGHT / 2 - 4, 1, '#666666');
     }
-    ctx.restore();
   }
 
-
-
-  private drawAvatar(x: number, y: number, radius: number, color: string, isAlive: boolean, isWinner: boolean): void {
+  private drawPixelAvatar(x: number, y: number, size: number, color: string, isAlive: boolean): void {
     const ctx = this.ctx;
-    ctx.save();
-    ctx.translate(x, y);
 
-    // Sticker Outline (White stroke outside)
-    ctx.beginPath();
-    ctx.arc(0, 0, radius + 2, 0, Math.PI * 2);
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 3;
-    ctx.stroke();
-
-    // Background
-    ctx.beginPath();
-    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+    // Background circle (pixel approximation - square with cut corners)
     ctx.fillStyle = isAlive ? color : '#333333';
-    ctx.fill();
+    ctx.fillRect(x + 2, y, size - 4, size);
+    ctx.fillRect(x, y + 2, size, size - 4);
 
-    // Inner Shadow (Simulated with gradient)
-    const grad = ctx.createRadialGradient(-5, -5, 2, 0, 0, radius);
-    grad.addColorStop(0, 'rgba(255,255,255,0.2)');
-    grad.addColorStop(1, 'rgba(0,0,0,0.1)');
-    ctx.fillStyle = grad;
-    ctx.fill();
-
-    // Face Drawing
-    if (!isAlive) {
-      // Dead Eyes (X)
-      ctx.strokeStyle = '#dddddd';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      // Left X
-      ctx.moveTo(-10, -6); ctx.lineTo(-4, 0);
-      ctx.moveTo(-4, -6); ctx.lineTo(-10, 0);
-      // Right X
-      ctx.moveTo(4, -6); ctx.lineTo(10, 0);
-      ctx.moveTo(10, -6); ctx.lineTo(4, 0);
-      ctx.stroke();
-
-      // Dead Line Mouth
-      ctx.beginPath();
-      ctx.moveTo(-8, 8);
-      ctx.lineTo(8, 8);
-      ctx.stroke();
-    } else {
-      // Alive Faces
+    // Eyes
+    if (isAlive) {
       ctx.fillStyle = '#ffffff';
-
-      if (isWinner) {
-        // Happy Arches
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = '#fff';
-        ctx.beginPath();
-        ctx.arc(-6, -2, 4, Math.PI, 0); // Arch
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(6, -2, 4, Math.PI, 0); // Arch
-        ctx.stroke();
-
-        // Big Grin
-        ctx.beginPath();
-        ctx.arc(0, 2, 8, 0.1, Math.PI - 0.1);
-        ctx.stroke();
-
-        // Crown
-        ctx.fillStyle = '#FFD700';
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(-12, -radius + 5);
-        ctx.lineTo(-6, -radius - 8);
-        ctx.lineTo(0, -radius - 2);
-        ctx.lineTo(6, -radius - 8);
-        ctx.lineTo(12, -radius + 5);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-
-      } else {
-        // Normal Eyes (Dots)
-        ctx.beginPath();
-        ctx.arc(-6, -3, 3, 0, Math.PI * 2);
-        ctx.arc(6, -3, 3, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Simple Smile
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(0, 4, 6, 0.3, Math.PI - 0.3);
-        ctx.stroke();
-      }
+      ctx.fillRect(x + 4, y + 6, 4, 4);
+      ctx.fillRect(x + size - 8, y + 6, 4, 4);
+      // Pupils
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(x + 6, y + 8, 2, 2);
+      ctx.fillRect(x + size - 6, y + 8, 2, 2);
+    } else {
+      // X eyes
+      ctx.fillStyle = '#888888';
+      ctx.fillRect(x + 4, y + 6, 2, 2);
+      ctx.fillRect(x + 6, y + 8, 2, 2);
+      ctx.fillRect(x + size - 6, y + 6, 2, 2);
+      ctx.fillRect(x + size - 8, y + 8, 2, 2);
     }
-    ctx.restore();
   }
 
-  private drawBombIcon(x: number, y: number, radius: number, type: BombType): void {
+  private drawPixelBombIcon(x: number, y: number, type: BombType): void {
     const ctx = this.ctx;
-    ctx.save();
-    ctx.translate(x, y);
+    let color: string;
 
-    // Bomb body
-    ctx.beginPath();
-    ctx.arc(0, 0, radius, 0, Math.PI * 2);
-
-    // Color based on type
     switch (type) {
-      case BombType.FIRE: ctx.fillStyle = '#FF4500'; break;
-      case BombType.ICE: ctx.fillStyle = '#00CED1'; break;
-      case BombType.PIERCING: ctx.fillStyle = '#9400D3'; break;
-      default: ctx.fillStyle = '#444444'; break;
+      case BombType.FIRE: color = RETRO_PALETTE.fireRed; break;
+      case BombType.ICE: color = RETRO_PALETTE.iceBlue; break;
+      case BombType.PIERCING: color = RETRO_PALETTE.magicPurple; break;
+      default: color = RETRO_PALETTE.bombBody; break;
     }
-    ctx.fill();
 
-    // Shine
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    ctx.beginPath();
-    ctx.arc(-radius * 0.3, -radius * 0.3, radius * 0.3, 0, Math.PI * 2);
-    ctx.fill();
-
+    // Simple 6x6 bomb
+    ctx.fillStyle = color;
+    ctx.fillRect(x + 1, y, 4, 6);
+    ctx.fillRect(x, y + 1, 6, 4);
     // Fuse
-    ctx.strokeStyle = '#8B4513';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(0, -radius);
-    ctx.lineTo(radius * 0.5, -radius * 1.5);
-    ctx.stroke();
-
-    ctx.restore();
+    ctx.fillStyle = RETRO_PALETTE.bombSpark;
+    ctx.fillRect(x + 2, y - 2, 2, 2);
   }
 
-  private drawBlastIcon(x: number, y: number, size: number): void {
+  private drawPixelAbilityIcon(x: number, y: number, type: 'kick' | 'punch' | 'shield' | 'teleport'): void {
     const ctx = this.ctx;
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.fillStyle = '#FF4400';
-
-    // Draw a "blast" star shape
-    ctx.beginPath();
-    const spikes = 8;
-    const outerRadius = size;
-    const innerRadius = size * 0.5;
-
-    for (let i = 0; i < spikes; i++) {
-      let angle = (Math.PI / spikes) * 2 * i;
-      const ox = Math.cos(angle) * outerRadius;
-      const oy = Math.sin(angle) * outerRadius;
-      ctx.lineTo(ox, oy);
-
-      angle += Math.PI / spikes;
-      const ix = Math.cos(angle) * innerRadius;
-      const iy = Math.sin(angle) * innerRadius;
-      ctx.lineTo(ix, iy);
-    }
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-  }
-
-  private drawAbilityIcon(x: number, y: number, type: 'kick' | 'punch' | 'shield' | 'teleport'): void {
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.translate(x, y);
-
-    // Background circle
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.beginPath();
-    ctx.arc(0, 0, 8, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = 'bold 10px Arial';
 
     switch (type) {
-      case 'kick':
-        ctx.fillText('👞', 0, 1); // Unicode shoe
-        break;
-      case 'punch':
-        ctx.fillText('🥊', 0, 1); // Unicode glove
-        break;
       case 'shield':
-        ctx.fillText('🛡️', 0, 1); // Unicode shield
+        ctx.fillStyle = RETRO_PALETTE.iceCyan;
+        ctx.fillRect(x + 1, y, 4, 2);
+        ctx.fillRect(x, y + 2, 6, 4);
+        ctx.fillRect(x + 1, y + 6, 4, 2);
         break;
       case 'teleport':
-        ctx.fillText('🌀', 0, 1); // Unicode swirl
+        ctx.fillStyle = RETRO_PALETTE.magicPink;
+        ctx.fillRect(x + 2, y, 2, 2);
+        ctx.fillRect(x, y + 2, 6, 2);
+        ctx.fillRect(x + 2, y + 4, 2, 2);
+        break;
+      case 'kick':
+        ctx.fillStyle = '#f77622';
+        ctx.fillRect(x, y + 2, 6, 4);
+        ctx.fillRect(x + 4, y + 4, 4, 2);
+        break;
+      case 'punch':
+        ctx.fillStyle = RETRO_PALETTE.fireOrange;
+        ctx.fillRect(x, y + 1, 4, 4);
+        ctx.fillRect(x + 4, y + 2, 4, 2);
         break;
     }
-    ctx.restore();
   }
 
   renderCountdown(count: number): void {
     this.ctx.save();
     this.ctx.scale(this.scale, this.scale);
 
+    // Dark overlay
     this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
     this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    // Animated scale effect based on count value
-    const scale = 1 + Math.sin(Date.now() / 150) * 0.1;
+    // Discrete pulse (2 sizes)
+    const pulsePhase = Math.floor(Date.now() / 200) % 2;
+    const pixelScale = pulsePhase === 0 ? 10 : 9;
 
-    this.ctx.save();
-    this.ctx.translate(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
-    this.ctx.scale(scale, scale);
+    // Draw large pixel number with outline
+    const text = count.toString();
+    const centerX = CANVAS_WIDTH / 2;
+    const centerY = CANVAS_HEIGHT / 2;
 
-    // Outer glow
-    this.ctx.shadowColor = '#ff6b35';
-    this.ctx.shadowBlur = 50;
-    this.ctx.fillStyle = '#ff6b35';
-    this.ctx.font = 'bold 140px Arial';
-    this.ctx.textAlign = 'center';
-    this.ctx.textBaseline = 'middle';
-    this.ctx.fillText(count.toString(), 0, 0);
+    // Orange outline
+    PixelFont.drawTextWithOutline(this.ctx, text, centerX, centerY - 30, pixelScale, RETRO_PALETTE.fireOrange, '#ffffff');
 
-    // Main text
-    this.ctx.shadowBlur = 20;
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.fillText(count.toString(), 0, 0);
-
-    this.ctx.restore();
-    this.ctx.shadowBlur = 0;
     this.ctx.restore();
   }
 
@@ -840,59 +775,63 @@ export class Renderer {
     this.ctx.save();
     this.ctx.scale(this.scale, this.scale);
 
+    // Dark overlay
     this.ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
     this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    this.ctx.textAlign = 'center';
-    this.ctx.textBaseline = 'middle';
-
-    // Animated pulse effect
-    const pulse = 1 + Math.sin(Date.now() / 300) * 0.05;
+    const centerX = CANVAS_WIDTH / 2;
+    const centerY = CANVAS_HEIGHT / 2;
 
     if (winner) {
-      const colors = [COLORS.player1, COLORS.player2, COLORS.player3, COLORS.player4];
-      const winnerColor = colors[winner.playerIndex];
+      const retro_colors = [
+        RETRO_PALETTE.player1,
+        RETRO_PALETTE.player2,
+        RETRO_PALETTE.player3,
+        RETRO_PALETTE.player4
+      ];
+      const winnerColor = retro_colors[winner.playerIndex];
 
-      // Winner text with massive glow
-      this.ctx.save();
-      this.ctx.translate(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 60);
-      this.ctx.scale(pulse, pulse);
+      // "PLAYER X" text
+      PixelFont.drawTextWithOutline(
+        this.ctx,
+        `PLAYER ${winner.playerIndex + 1}`,
+        centerX,
+        centerY - 80,
+        4,
+        winnerColor,
+        '#000000'
+      );
 
-      this.ctx.shadowColor = winnerColor;
-      this.ctx.shadowBlur = 60;
-      this.ctx.fillStyle = winnerColor;
-      this.ctx.font = 'bold 72px Arial';
-      this.ctx.fillText(`PLAYER ${winner.playerIndex + 1}`, 0, -20);
-
-      this.ctx.shadowBlur = 40;
-      this.ctx.fillStyle = '#ffffff';
-      this.ctx.font = 'bold 64px Arial';
-      this.ctx.fillText('WINS!', 0, 50);
-
-      this.ctx.restore();
+      // "WINS!" text with blinking
+      const blink = Math.floor(Date.now() / 300) % 2 === 0;
+      PixelFont.drawTextWithOutline(
+        this.ctx,
+        'WINS!',
+        centerX,
+        centerY - 20,
+        5,
+        blink ? '#ffffff' : RETRO_PALETTE.uiGold,
+        '#000000'
+      );
     } else {
-      this.ctx.save();
-      this.ctx.translate(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 30);
-      this.ctx.scale(pulse, pulse);
-
-      this.ctx.shadowColor = '#888888';
-      this.ctx.shadowBlur = 40;
-      this.ctx.fillStyle = '#ffffff';
-      this.ctx.font = 'bold 64px Arial';
-      this.ctx.fillText('DRAW!', 0, 0);
-
-      this.ctx.restore();
+      // "DRAW!" text with blinking
+      const blink = Math.floor(Date.now() / 300) % 2 === 0;
+      PixelFont.drawTextWithOutline(
+        this.ctx,
+        'DRAW!',
+        centerX,
+        centerY - 40,
+        5,
+        blink ? '#ffffff' : '#888888',
+        '#000000'
+      );
     }
 
-    this.ctx.shadowBlur = 0;
+    // Instruction text (blinking cursor style)
+    const cursorBlink = Math.floor(Date.now() / 500) % 2 === 0;
+    const instructionText = cursorBlink ? 'PRESS SPACE TO PLAY AGAIN' : 'PRESS SPACE TO PLAY AGAIN_';
+    PixelFont.drawTextCentered(this.ctx, instructionText, centerX, centerY + 80, 2, '#aaaaaa');
 
-    // Instruction text with subtle glow
-    this.ctx.shadowColor = 'rgba(255, 255, 255, 0.5)';
-    this.ctx.shadowBlur = 10;
-    this.ctx.fillStyle = '#cccccc';
-    this.ctx.font = '28px Arial';
-    this.ctx.fillText('Press SPACE to play again', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 100);
-    this.ctx.shadowBlur = 0;
     this.ctx.restore();
   }
 
@@ -901,39 +840,30 @@ export class Renderer {
     this.ctx.scale(this.scale, this.scale);
     const time = Date.now();
 
-    // Animated gradient background
-    const bgGradient = this.ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT);
-    bgGradient.addColorStop(0, '#1a1a2e');
-    bgGradient.addColorStop(0.5, '#16213e');
-    bgGradient.addColorStop(1, '#0f3460');
-    this.ctx.fillStyle = bgGradient;
+    // Solid dark background
+    this.ctx.fillStyle = RETRO_PALETTE.uiBlack;
     this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    // Draw animated background elements
+    // Draw pixel background elements
     this.drawMenuBackground(time);
 
-    // Draw floating bombs
+    // Draw pixel bombs
     this.drawFloatingBombs(time);
 
-    // Draw bouncing characters
+    // Draw pixel characters
     this.drawMenuCharacters(time, playerCount, isSinglePlayer);
 
-    // Animated title with bouncy letters
+    // Pixel title
     this.drawBouncyTitle(time);
 
     // Mode selection panel
     this.drawMenuPanel(time, playerCount, isSinglePlayer, aiDifficulty);
 
-    // Start instruction with bouncy animation
-    const bounceY = Math.sin(time / 300) * 5;
-    const instructionPulse = 0.8 + Math.sin(time / 400) * 0.2;
-    this.ctx.shadowColor = `rgba(255, 200, 100, ${instructionPulse})`;
-    this.ctx.shadowBlur = 25;
-    this.ctx.font = 'bold 28px Arial';
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.textAlign = 'center';
-    this.ctx.fillText('Press SPACE to start', CANVAS_WIDTH / 2, 540 + bounceY);
-    this.ctx.shadowBlur = 0;
+    // Start instruction - blinking text
+    const blink = Math.floor(time / 500) % 2 === 0;
+    if (blink) {
+      PixelFont.drawTextCentered(this.ctx, 'PRESS SPACE TO START', CANVAS_WIDTH / 2, 540, 2, RETRO_PALETTE.uiGold);
+    }
 
     // Controls at bottom
     this.drawMenuControls(isSinglePlayer, playerCount);
@@ -944,140 +874,105 @@ export class Renderer {
   private drawMenuBackground(time: number): void {
     const ctx = this.ctx;
 
-    // 1. Base Gradient
-    const bgGradient = ctx.createRadialGradient(
-      CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, 0,
-      CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, CANVAS_WIDTH * 0.8
-    );
-    bgGradient.addColorStop(0, '#1a1a1a');
-    bgGradient.addColorStop(1, '#050505');
-    ctx.fillStyle = bgGradient;
-    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-
-    // 2. Decorative grid pattern (subtle)
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
-    ctx.lineWidth = 1;
+    // 1. Pixel grid pattern
+    ctx.fillStyle = RETRO_PALETTE.uiDark;
     for (let x = 0; x < CANVAS_WIDTH; x += TILE_SIZE) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, CANVAS_HEIGHT);
-      ctx.stroke();
-    }
-    for (let y = 0; y < CANVAS_HEIGHT; y += TILE_SIZE) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(CANVAS_WIDTH, y);
-      ctx.stroke();
-    }
-
-    // 3. Floating particles (enhanced)
-    for (let i = 0; i < 30; i++) {
-      const x = ((time / 60 + i * 120) % (CANVAS_WIDTH + 100)) - 50;
-      const y = (Math.sin(time / 1200 + i * 0.7) * 40) + (i * 25) % CANVAS_HEIGHT;
-      const size = 1.5 + Math.sin(time / 600 + i) * 1;
-      const alpha = 0.2 + Math.sin(time / 400 + i * 0.8) * 0.15;
-
-      ctx.fillStyle = `rgba(255, 180, 80, ${alpha})`;
-      ctx.beginPath();
-      ctx.arc(x, y, size, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Subtle glow for some particles
-      if (i % 5 === 0) {
-        ctx.shadowColor = '#ff9632';
-        ctx.shadowBlur = 8;
-        ctx.fill();
-        ctx.shadowBlur = 0;
+      for (let y = 0; y < CANVAS_HEIGHT; y += TILE_SIZE) {
+        // Checkerboard pattern
+        if ((Math.floor(x / TILE_SIZE) + Math.floor(y / TILE_SIZE)) % 2 === 0) {
+          ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+        }
       }
     }
 
-    // 4. Subtle Scanlines
-    ctx.save();
-    ctx.globalAlpha = 0.05;
-    ctx.fillStyle = '#000000';
-    for (let y = 0; y < CANVAS_HEIGHT; y += 4) {
-      ctx.fillRect(0, y, CANVAS_WIDTH, 2);
+    // 2. Pixel sparkles (discrete positions)
+    const sparklePhase = Math.floor(time / 200) % 4;
+    ctx.fillStyle = RETRO_PALETTE.fireYellow;
+    for (let i = 0; i < 20; i++) {
+      // Fixed positions based on index, sparkle on/off based on phase
+      const showSparkle = (i + sparklePhase) % 4 === 0;
+      if (showSparkle) {
+        const px = ((i * 137) % CANVAS_WIDTH);
+        const py = ((i * 89) % CANVAS_HEIGHT);
+        ctx.fillRect(px, py, 2, 2);
+      }
     }
-    ctx.restore();
 
-    // 5. Vignette Effect
-    const vignette = ctx.createRadialGradient(
-      CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, CANVAS_WIDTH * 0.4,
-      CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, CANVAS_WIDTH * 0.8
-    );
-    vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    vignette.addColorStop(1, 'rgba(0, 0, 0, 0.6)');
-    ctx.fillStyle = vignette;
-    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    // 3. Scanlines (every 2 pixels)
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
+    for (let y = 0; y < CANVAS_HEIGHT; y += 2) {
+      ctx.fillRect(0, y, CANVAS_WIDTH, 1);
+    }
+
+    // 4. Border frame
+    const borderSize = 4;
+    ctx.fillStyle = RETRO_PALETTE.uiMid;
+    // Top
+    ctx.fillRect(0, 0, CANVAS_WIDTH, borderSize);
+    // Bottom
+    ctx.fillRect(0, CANVAS_HEIGHT - borderSize, CANVAS_WIDTH, borderSize);
+    // Left
+    ctx.fillRect(0, 0, borderSize, CANVAS_HEIGHT);
+    // Right
+    ctx.fillRect(CANVAS_WIDTH - borderSize, 0, borderSize, CANVAS_HEIGHT);
   }
 
   private drawFloatingBombs(time: number): void {
     const ctx = this.ctx;
     const bombs = [
-      { x: 80, y: 150, size: 20, speed: 1.2, phase: 0 },
-      { x: CANVAS_WIDTH - 80, y: 180, size: 22, speed: 1.0, phase: 1 },
-      { x: 120, y: 450, size: 18, speed: 1.4, phase: 2 },
-      { x: CANVAS_WIDTH - 100, y: 480, size: 16, speed: 1.1, phase: 3 },
-      { x: 60, y: 320, size: 14, speed: 0.9, phase: 4 },
-      { x: CANVAS_WIDTH - 60, y: 350, size: 15, speed: 1.3, phase: 5 },
+      { x: 80, y: 150, size: 24, phase: 0 },
+      { x: CANVAS_WIDTH - 80, y: 180, size: 28, phase: 1 },
+      { x: 120, y: 450, size: 20, phase: 2 },
+      { x: CANVAS_WIDTH - 100, y: 480, size: 22, phase: 3 },
+      { x: 60, y: 320, size: 18, phase: 4 },
+      { x: CANVAS_WIDTH - 60, y: 350, size: 20, phase: 5 },
     ];
 
     bombs.forEach(bomb => {
-      const floatY = Math.sin(time / 600 * bomb.speed + bomb.phase) * 15;
-      const rotate = Math.sin(time / 800 + bomb.phase) * 0.2;
-      const pulse = 1 + Math.sin(time / 400 + bomb.phase) * 0.1;
+      // Discrete bob - 3 positions
+      const bobPhase = Math.floor((time / 300 + bomb.phase * 100) / 100) % 3;
+      const bobOffsets = [0, -4, -8];
+      const bobY = bobOffsets[bobPhase];
 
-      ctx.save();
-      ctx.translate(bomb.x, bomb.y + floatY);
-      ctx.rotate(rotate);
-      ctx.scale(pulse, pulse);
+      const px = Math.floor(bomb.x - bomb.size / 2);
+      const py = Math.floor(bomb.y + bobY - bomb.size / 2);
 
-      // Bomb glow
-      ctx.shadowColor = '#ff6b35';
-      ctx.shadowBlur = 20;
+      // Draw pixel bomb (square with cut corners)
+      ctx.fillStyle = RETRO_PALETTE.bombBody;
+      const s = bomb.size;
+      const corner = Math.floor(s / 4);
 
-      // Bomb body
-      ctx.fillStyle = '#2c2c2c';
-      ctx.beginPath();
-      ctx.arc(0, 0, bomb.size, 0, Math.PI * 2);
-      ctx.fill();
+      // Main body (octagon-ish shape)
+      ctx.fillRect(px + corner, py, s - corner * 2, s);
+      ctx.fillRect(px, py + corner, s, s - corner * 2);
 
-      // Bomb highlight
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-      ctx.beginPath();
-      ctx.arc(-bomb.size * 0.3, -bomb.size * 0.3, bomb.size * 0.35, 0, Math.PI * 2);
-      ctx.fill();
+      // Highlight pixels
+      ctx.fillStyle = RETRO_PALETTE.bombHighlight;
+      ctx.fillRect(px + corner + 2, py + corner, 4, 4);
 
-      // Fuse
-      ctx.strokeStyle = '#8B4513';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(0, -bomb.size);
-      ctx.quadraticCurveTo(bomb.size * 0.5, -bomb.size * 1.3, bomb.size * 0.3, -bomb.size * 1.5);
-      ctx.stroke();
+      // Fuse (vertical line)
+      ctx.fillStyle = RETRO_PALETTE.bombFuse;
+      ctx.fillRect(px + Math.floor(s / 2) - 1, py - 6, 3, 8);
 
-      // Fuse spark
-      const sparkFlicker = Math.sin(time / 50 + bomb.phase * 10) > 0;
-      if (sparkFlicker) {
-        ctx.fillStyle = '#ffaa00';
-        ctx.beginPath();
-        ctx.arc(bomb.size * 0.3, -bomb.size * 1.5, 4, 0, Math.PI * 2);
-        ctx.fill();
-
+      // Fuse spark - blinking
+      const sparkOn = Math.floor(time / 100 + bomb.phase * 50) % 2 === 0;
+      if (sparkOn) {
+        ctx.fillStyle = RETRO_PALETTE.bombSpark;
+        ctx.fillRect(px + Math.floor(s / 2) - 2, py - 10, 4, 4);
         ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.arc(bomb.size * 0.3, -bomb.size * 1.5, 2, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.fillRect(px + Math.floor(s / 2) - 1, py - 9, 2, 2);
       }
-
-      ctx.shadowBlur = 0;
-      ctx.restore();
     });
   }
 
   private drawMenuCharacters(time: number, playerCount: number, isSinglePlayer: boolean): void {
     const ctx = this.ctx;
-    const playerColors = [COLORS.player1, COLORS.player2, COLORS.player3, COLORS.player4];
+    const playerColors = [
+      RETRO_PALETTE.player1,
+      RETRO_PALETTE.player2,
+      RETRO_PALETTE.player3,
+      RETRO_PALETTE.player4
+    ];
     const numPlayers = isSinglePlayer ? 4 : playerCount;
 
     const positions = [
@@ -1089,442 +984,358 @@ export class Renderer {
 
     for (let i = 0; i < numPlayers; i++) {
       const pos = positions[i];
-      const bouncePhase = i * 0.8;
-      const bounceY = Math.abs(Math.sin(time / 400 + bouncePhase)) * 20;
-      const squash = 1 - Math.abs(Math.sin(time / 400 + bouncePhase)) * 0.15;
-      const stretch = 1 + Math.abs(Math.sin(time / 400 + bouncePhase)) * 0.1;
+      // Discrete bounce - 4 positions
+      const bouncePhase = Math.floor((time / 150 + i * 50) / 50) % 4;
+      const bounceOffsets = [0, -8, -12, -8];
+      const bounceY = bounceOffsets[bouncePhase];
 
-      const y = pos.baseY - bounceY;
-
-      ctx.save();
-      ctx.translate(pos.x, y);
-      ctx.scale(squash, stretch);
-
-      this.drawMenuCharacter(ctx, 0, 0, playerColors[i], time, i);
-
-      ctx.restore();
+      this.drawPixelCharacter(ctx, pos.x, pos.baseY + bounceY, playerColors[i], time, i);
     }
   }
 
-  private drawMenuCharacter(ctx: CanvasRenderingContext2D, x: number, y: number, color: string, time: number, index: number): void {
-    ctx.save();
-    ctx.translate(x, y);
+  private drawPixelCharacter(ctx: CanvasRenderingContext2D, cx: number, cy: number, color: string, time: number, index: number): void {
+    const size = 32;
+    const px = Math.floor(cx - size / 2);
+    const py = Math.floor(cy - size / 2);
+    const pixel = 4; // Pixel size for character
 
     // Shadow
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-    ctx.beginPath();
-    ctx.ellipse(0, 25, 18, 8, 0, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+    ctx.fillRect(px + 4, py + size + 2, size - 8, 4);
 
-    // Body glow
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 20;
+    // Body - square with cut corners
+    ctx.fillStyle = color;
+    const corner = pixel * 2;
+    ctx.fillRect(px + corner, py, size - corner * 2, size);
+    ctx.fillRect(px, py + corner, size, size - corner * 2);
 
-    // Body
-    const bodyGradient = ctx.createRadialGradient(-5, -8, 2, 0, 0, 22);
-    bodyGradient.addColorStop(0, this.lightenColor(color, 40));
-    bodyGradient.addColorStop(0.5, color);
-    bodyGradient.addColorStop(1, this.darkenColor(color, 30));
-    ctx.fillStyle = bodyGradient;
-    ctx.beginPath();
-    ctx.arc(0, 0, 20, 0, Math.PI * 2);
-    ctx.fill();
+    // Outline
+    ctx.fillStyle = '#000000';
+    // Top edge
+    ctx.fillRect(px + corner, py - 2, size - corner * 2, 2);
+    // Bottom edge
+    ctx.fillRect(px + corner, py + size, size - corner * 2, 2);
+    // Left edge
+    ctx.fillRect(px - 2, py + corner, 2, size - corner * 2);
+    // Right edge
+    ctx.fillRect(px + size, py + corner, 2, size - corner * 2);
 
-    ctx.shadowBlur = 0;
+    // Highlight pixels
+    ctx.fillStyle = '#ffffff';
+    ctx.globalAlpha = 0.4;
+    ctx.fillRect(px + corner + pixel, py + corner, pixel * 2, pixel);
+    ctx.globalAlpha = 1;
 
-    // Body outline
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 3;
-    ctx.stroke();
-
-    // Highlight
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-    ctx.beginPath();
-    ctx.ellipse(-6, -10, 8, 5, -0.3, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Eyes
-    const blinkPhase = Math.floor(time / 3000 + index) % 4 === 0 && (time % 3000) < 150;
-    const eyeY = -4;
+    // Eyes - blink occasionally
+    const blinkPhase = Math.floor(time / 2000 + index) % 5 === 0 && (time % 2000) < 150;
+    const eyeY = py + size / 2 - pixel;
 
     if (blinkPhase) {
-      // Blink - closed eyes
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(-8, eyeY);
-      ctx.lineTo(-2, eyeY);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(2, eyeY);
-      ctx.lineTo(8, eyeY);
-      ctx.stroke();
+      // Closed eyes - horizontal lines
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(px + pixel * 2, eyeY + pixel, pixel * 2, 2);
+      ctx.fillRect(px + size - pixel * 4, eyeY + pixel, pixel * 2, 2);
     } else {
       // Open eyes
-      [-5, 5].forEach(ex => {
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.arc(ex, eyeY, 5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(px + pixel * 2, eyeY, pixel * 2, pixel * 2);
+      ctx.fillRect(px + size - pixel * 4, eyeY, pixel * 2, pixel * 2);
 
-        // Pupil - looking around
-        const lookX = Math.sin(time / 1000 + index) * 1.5;
-        const lookY = Math.cos(time / 800 + index) * 1;
-        ctx.fillStyle = '#000000';
-        ctx.beginPath();
-        ctx.arc(ex + lookX, eyeY + lookY, 2.5, 0, Math.PI * 2);
-        ctx.fill();
-      });
+      // Pupils - discrete look direction
+      const lookPhase = Math.floor(time / 500 + index * 100) % 3;
+      const lookOffsets = [0, pixel / 2, -pixel / 2];
+      const lookX = lookOffsets[lookPhase];
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(px + pixel * 2 + pixel / 2 + lookX, eyeY + pixel / 2, pixel, pixel);
+      ctx.fillRect(px + size - pixel * 4 + pixel / 2 + lookX, eyeY + pixel / 2, pixel, pixel);
     }
 
-    // Feet
-    const footOffset = Math.sin(time / 200 + index) * 3;
+    // Feet - alternating animation
+    const footPhase = Math.floor(time / 200 + index * 50) % 2;
     ctx.fillStyle = color;
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2;
+    if (footPhase === 0) {
+      ctx.fillRect(px + pixel, py + size, pixel * 2, pixel);
+      ctx.fillRect(px + size - pixel * 3, py + size + 2, pixel * 2, pixel);
+    } else {
+      ctx.fillRect(px + pixel, py + size + 2, pixel * 2, pixel);
+      ctx.fillRect(px + size - pixel * 3, py + size, pixel * 2, pixel);
+    }
 
-    ctx.beginPath();
-    ctx.ellipse(-9, 18 + footOffset, 6, 5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.ellipse(9, 18 - footOffset, 6, 5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    // Hands waving
-    const waveAngle = Math.sin(time / 300 + index * 2) * 0.5;
-    ctx.save();
-    ctx.translate(-18, -5);
-    ctx.rotate(-0.5 + waveAngle);
+    // Hands - waving
+    const handPhase = Math.floor(time / 250 + index * 75) % 3;
+    const handOffsets = [-pixel, 0, pixel];
+    const handY = handOffsets[handPhase];
     ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(0, 0, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.restore();
+    // Left hand
+    ctx.fillRect(px - pixel * 2, py + size / 2 + handY, pixel * 2, pixel * 2);
+    // Right hand
+    ctx.fillRect(px + size, py + size / 2 - handY, pixel * 2, pixel * 2);
 
-    ctx.save();
-    ctx.translate(18, -5);
-    ctx.rotate(0.5 - waveAngle);
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(0, 0, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.restore();
-
-    ctx.restore();
+    // Hand outlines
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(px - pixel * 2 - 1, py + size / 2 + handY - 1, 1, pixel * 2 + 2);
+    ctx.fillRect(px + size + pixel * 2, py + size / 2 - handY - 1, 1, pixel * 2 + 2);
   }
 
   private drawBouncyTitle(time: number): void {
     const ctx = this.ctx;
     const title = 'BOMB BATTLES';
-    const baseY = 80;
+    const baseY = 60;
+    const scale = 6;
 
-    ctx.font = 'bold 62px Arial';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+    // Calculate total width for centering
+    const charWidth = (5 + 1) * scale; // 5px char + 1px spacing
+    const totalWidth = title.length * charWidth - scale;
+    let currentX = Math.floor(CANVAS_WIDTH / 2 - totalWidth / 2);
 
-    // Measure for centering
-    const totalWidth = ctx.measureText(title).width;
-    let currentX = CANVAS_WIDTH / 2 - totalWidth / 2;
-
-    // Draw each letter with individual bounce
+    // Draw each letter with discrete bounce
     for (let i = 0; i < title.length; i++) {
       const char = title[i];
-      const charWidth = ctx.measureText(char).width;
-      const bounceOffset = Math.sin(time / 200 + i * 0.3) * 6;
-      const rotateOffset = Math.sin(time / 300 + i * 0.4) * 0.05;
+      // Discrete bounce - 4 positions
+      const bouncePhase = Math.floor((time / 100 + i * 30) / 30) % 4;
+      const bounceOffsets = [0, -4, -8, -4];
+      const bounceY = bounceOffsets[bouncePhase];
 
-      ctx.save();
-      ctx.translate(currentX + charWidth / 2, baseY + bounceOffset);
-      ctx.rotate(rotateOffset);
+      // Color cycling between fire colors
+      const colorPhase = Math.floor((time / 150 + i * 20) / 20) % 4;
+      const colors = [
+        RETRO_PALETTE.fireWhite,
+        RETRO_PALETTE.fireYellow,
+        RETRO_PALETTE.fireOrange,
+        RETRO_PALETTE.fireYellow
+      ];
+      const color = colors[colorPhase];
 
-      // Glow layers
-      ctx.shadowColor = '#ff6b35';
-      ctx.shadowBlur = 30;
-      ctx.fillStyle = '#ff6b35';
-      ctx.fillText(char, 0, 0);
-
-      ctx.shadowBlur = 15;
-      ctx.fillStyle = '#ffaa55';
-      ctx.fillText(char, 0, 0);
-
-      ctx.shadowBlur = 5;
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText(char, 0, 0);
-
-      ctx.restore();
+      // Draw with outline
+      PixelFont.drawText(ctx, char, currentX + scale, baseY + bounceY + scale, scale, RETRO_PALETTE.uiBlack);
+      PixelFont.drawText(ctx, char, currentX, baseY + bounceY, scale, color);
 
       currentX += charWidth;
     }
+
+    // Subtitle
+    PixelFont.drawTextCentered(ctx, 'CLASSIC ARENA ACTION', CANVAS_WIDTH / 2, baseY + 60, 2, RETRO_PALETTE.uiLight);
   }
 
   private drawMenuPanel(time: number, playerCount: number, isSinglePlayer: boolean, aiDifficulty: 'easy' | 'medium' | 'hard'): void {
     const ctx = this.ctx;
-    const panelX = CANVAS_WIDTH / 2 - 200;
-    const panelY = 170;
-    const panelWidth = 400;
-    const panelHeight = 340;
+    const panelX = CANVAS_WIDTH / 2 - 180;
+    const panelY = 150;
+    const panelWidth = 360;
+    const panelHeight = 320;
+    const border = 4;
 
-    // Panel background with glass effect
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-    ctx.beginPath();
-    ctx.roundRect(panelX, panelY, panelWidth, panelHeight, 20);
-    ctx.fill();
+    // Panel background - solid color with pixel border
+    ctx.fillStyle = RETRO_PALETTE.uiBlack;
+    ctx.fillRect(panelX, panelY, panelWidth, panelHeight);
 
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    // Border
+    ctx.fillStyle = RETRO_PALETTE.uiLight;
+    ctx.fillRect(panelX, panelY, panelWidth, border); // Top
+    ctx.fillRect(panelX, panelY + panelHeight - border, panelWidth, border); // Bottom
+    ctx.fillRect(panelX, panelY, border, panelHeight); // Left
+    ctx.fillRect(panelX + panelWidth - border, panelY, border, panelHeight); // Right
 
-    // Inner glow
-    ctx.strokeStyle = 'rgba(255, 150, 50, 0.1)';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.roundRect(panelX + 4, panelY + 4, panelWidth - 8, panelHeight - 8, 16);
-    ctx.stroke();
+    // Inner border
+    ctx.fillStyle = RETRO_PALETTE.uiMid;
+    ctx.fillRect(panelX + border, panelY + border, panelWidth - border * 2, 2);
+    ctx.fillRect(panelX + border, panelY + panelHeight - border - 2, panelWidth - border * 2, 2);
 
     // Mode selection header
-    ctx.font = 'bold 24px Arial';
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'center';
-    ctx.fillText('Game Mode', CANVAS_WIDTH / 2, panelY + 40);
+    PixelFont.drawTextCentered(ctx, 'GAME MODE', CANVAS_WIDTH / 2, panelY + 30, 3, RETRO_PALETTE.uiWhite);
 
     // Mode buttons
-    const modeY = panelY + 90;
-    this.drawMenuButton(ctx, CANVAS_WIDTH / 2 - 100, modeY, 90, 45, 'Single', 'S', isSinglePlayer, time, 0);
-    this.drawMenuButton(ctx, CANVAS_WIDTH / 2 + 10, modeY, 90, 45, 'Multi', 'M', !isSinglePlayer, time, 1);
+    const modeY = panelY + 70;
+    this.drawPixelButton(ctx, CANVAS_WIDTH / 2 - 100, modeY, 90, 40, 'SINGLE', 'S', isSinglePlayer, time, 0);
+    this.drawPixelButton(ctx, CANVAS_WIDTH / 2 + 10, modeY, 90, 40, 'MULTI', 'M', !isSinglePlayer, time, 1);
 
     // Options section
-    const optionsY = panelY + 160;
+    const optionsY = panelY + 140;
 
     if (isSinglePlayer) {
-      ctx.font = 'bold 20px Arial';
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText('AI Difficulty', CANVAS_WIDTH / 2, optionsY);
+      PixelFont.drawTextCentered(ctx, 'AI DIFFICULTY', CANVAS_WIDTH / 2, optionsY, 2, RETRO_PALETTE.uiWhite);
 
       const difficulties: ('easy' | 'medium' | 'hard')[] = ['easy', 'medium', 'hard'];
-      const diffLabels = ['Easy', 'Medium', 'Hard'];
-      const diffY = optionsY + 45;
-      const spacing = 110;
+      const diffLabels = ['EASY', 'MED', 'HARD'];
+      const diffY = optionsY + 30;
+      const spacing = 100;
       const startX = CANVAS_WIDTH / 2 - spacing;
 
       for (let i = 0; i < 3; i++) {
         const isSelected = aiDifficulty === difficulties[i];
-        this.drawMenuButton(ctx, startX + i * spacing - 45, diffY, 90, 38, diffLabels[i], String(i + 1), isSelected, time, i + 2);
+        this.drawPixelButton(ctx, startX + i * spacing - 40, diffY, 80, 36, diffLabels[i], String(i + 1), isSelected, time, i + 2);
       }
     } else {
-      ctx.font = 'bold 20px Arial';
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText('Players', CANVAS_WIDTH / 2, optionsY);
+      PixelFont.drawTextCentered(ctx, 'PLAYERS', CANVAS_WIDTH / 2, optionsY, 2, RETRO_PALETTE.uiWhite);
 
-      const buttonY = optionsY + 50;
-      const spacing = 70;
+      const buttonY = optionsY + 35;
+      const spacing = 60;
       const startX = CANVAS_WIDTH / 2 - spacing;
+      const size = 40;
 
       for (let i = 2; i <= 4; i++) {
         const isSelected = playerCount === i;
-        const bounce = isSelected ? Math.sin(time / 200 + i) * 3 : 0;
+        const px = Math.floor(startX + (i - 2) * spacing - size / 2);
+        const py = buttonY;
 
-        ctx.save();
-        ctx.translate(startX + (i - 2) * spacing, buttonY + bounce);
-
-        // Button circle
+        // Discrete bounce for selected
+        let offsetY = 0;
         if (isSelected) {
-          ctx.shadowColor = '#ff6b35';
-          ctx.shadowBlur = 20;
-        }
-        ctx.fillStyle = isSelected ? '#ff6b35' : 'rgba(255, 255, 255, 0.15)';
-        ctx.beginPath();
-        ctx.arc(0, 0, 28, 0, Math.PI * 2);
-        ctx.fill();
-
-        if (isSelected) {
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 3;
-          ctx.stroke();
+          const bouncePhase = Math.floor(time / 150) % 2;
+          offsetY = bouncePhase === 0 ? -2 : 0;
         }
 
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 24px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(String(i), 0, 0);
+        // Button box
+        ctx.fillStyle = isSelected ? RETRO_PALETTE.fireOrange : RETRO_PALETTE.uiDark;
+        ctx.fillRect(px, py + offsetY, size, size);
 
-        ctx.restore();
+        // Border
+        ctx.fillStyle = isSelected ? RETRO_PALETTE.fireYellow : RETRO_PALETTE.uiMid;
+        ctx.fillRect(px, py + offsetY, size, 3);
+        ctx.fillRect(px, py + offsetY + size - 3, size, 3);
+        ctx.fillRect(px, py + offsetY, 3, size);
+        ctx.fillRect(px + size - 3, py + offsetY, 3, size);
+
+        // Number
+        PixelFont.drawTextCentered(ctx, String(i), px + size / 2, py + offsetY + 12, 3, RETRO_PALETTE.uiWhite);
       }
     }
 
-    // Player indicators (colored dots showing who's playing)
-    const indicatorY = panelY + panelHeight - 50;
-    const indicatorSpacing = 30;
-    const indicatorStartX = CANVAS_WIDTH / 2 - ((isSinglePlayer ? 4 : playerCount) - 1) * indicatorSpacing / 2;
-    const playerColors = [COLORS.player1, COLORS.player2, COLORS.player3, COLORS.player4];
+    // Player indicators
+    const indicatorY = panelY + panelHeight - 60;
+    const playerColors = [
+      RETRO_PALETTE.player1,
+      RETRO_PALETTE.player2,
+      RETRO_PALETTE.player3,
+      RETRO_PALETTE.player4
+    ];
 
-    ctx.font = '14px Arial';
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-    ctx.textAlign = 'center';
-    ctx.fillText('Players:', CANVAS_WIDTH / 2, indicatorY - 20);
+    PixelFont.drawTextCentered(ctx, 'PLAYERS', CANVAS_WIDTH / 2, indicatorY - 20, 1, RETRO_PALETTE.uiLight);
 
     const numIndicators = isSinglePlayer ? 4 : playerCount;
+    const indicatorSpacing = 36;
+    const indicatorStartX = CANVAS_WIDTH / 2 - ((numIndicators - 1) * indicatorSpacing) / 2;
+
     for (let i = 0; i < numIndicators; i++) {
-      const pulse = 1 + Math.sin(time / 300 + i * 0.5) * 0.15;
-      const x = indicatorStartX + i * indicatorSpacing;
+      const x = Math.floor(indicatorStartX + i * indicatorSpacing);
+      const size = 16;
 
-      ctx.save();
-      ctx.translate(x, indicatorY);
-      ctx.scale(pulse, pulse);
+      // Blinking for selected indicator
+      const blinkPhase = Math.floor(time / 200 + i * 50) % 3;
+      const showBorder = blinkPhase !== 0;
 
-      ctx.shadowColor = playerColors[i];
-      ctx.shadowBlur = 10;
+      // Indicator box
       ctx.fillStyle = playerColors[i];
-      ctx.beginPath();
-      ctx.arc(0, 0, 8, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.fillRect(x - size / 2, indicatorY - size / 2, size, size);
 
-      ctx.shadowBlur = 0;
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      if (isSinglePlayer && i > 0) {
-        // AI badge
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-        ctx.font = 'bold 8px Arial';
-        ctx.fillText('AI', 0, 1);
+      // Border
+      if (showBorder) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x - size / 2 - 2, indicatorY - size / 2 - 2, size + 4, 2);
+        ctx.fillRect(x - size / 2 - 2, indicatorY + size / 2, size + 4, 2);
+        ctx.fillRect(x - size / 2 - 2, indicatorY - size / 2, 2, size + 4);
+        ctx.fillRect(x + size / 2, indicatorY - size / 2, 2, size + 4);
       }
 
-      ctx.restore();
+      // AI label
+      if (isSinglePlayer && i > 0) {
+        PixelFont.drawTextCentered(ctx, 'AI', x, indicatorY + size / 2 + 10, 1, RETRO_PALETTE.uiLight);
+      }
     }
   }
 
-  private drawMenuButton(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, label: string, key: string, isSelected: boolean, time: number, index: number): void {
-    const bounce = isSelected ? Math.sin(time / 200 + index) * 2 : 0;
+  private drawPixelButton(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, label: string, key: string, isSelected: boolean, time: number, _index: number): void {
+    // Discrete bounce for selected
+    let offsetY = 0;
+    if (isSelected) {
+      const bouncePhase = Math.floor(time / 150) % 2;
+      offsetY = bouncePhase === 0 ? -2 : 0;
+    }
 
-    ctx.save();
-    ctx.translate(x + width / 2, y + height / 2 + bounce);
+    const px = Math.floor(x);
+    const py = Math.floor(y + offsetY);
 
     // Button background
-    if (isSelected) {
-      ctx.shadowColor = '#ff6b35';
-      ctx.shadowBlur = 20;
-    }
+    ctx.fillStyle = isSelected ? RETRO_PALETTE.fireOrange : RETRO_PALETTE.uiDark;
+    ctx.fillRect(px, py, width, height);
 
-    ctx.fillStyle = isSelected ? '#ff6b35' : 'rgba(255, 255, 255, 0.1)';
-    ctx.beginPath();
-    ctx.roundRect(-width / 2, -height / 2, width, height, 10);
-    ctx.fill();
-
-    if (isSelected) {
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-
-    ctx.shadowBlur = 0;
+    // Border
+    const borderColor = isSelected ? RETRO_PALETTE.fireYellow : RETRO_PALETTE.uiMid;
+    ctx.fillStyle = borderColor;
+    ctx.fillRect(px, py, width, 3); // Top
+    ctx.fillRect(px, py + height - 3, width, 3); // Bottom
+    ctx.fillRect(px, py, 3, height); // Left
+    ctx.fillRect(px + width - 3, py, 3, height); // Right
 
     // Label
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 18px Arial';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(label, 0, -5);
+    PixelFont.drawTextCentered(ctx, label, px + width / 2, py + 8, 2, RETRO_PALETTE.uiWhite);
 
     // Key hint
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-    ctx.font = '12px Arial';
-    ctx.fillText(`(${key})`, 0, 12);
-
-    ctx.restore();
+    PixelFont.drawTextCentered(ctx, '(' + key + ')', px + width / 2, py + height - 14, 1, RETRO_PALETTE.uiLight);
   }
 
   private drawMenuControls(isSinglePlayer: boolean, playerCount: number): void {
     const ctx = this.ctx;
-    const playerColors = [COLORS.player1, COLORS.player2, COLORS.player3, COLORS.player4];
+    const playerColors = [
+      RETRO_PALETTE.player1,
+      RETRO_PALETTE.player2,
+      RETRO_PALETTE.player3,
+      RETRO_PALETTE.player4
+    ];
 
-    ctx.font = '12px Arial';
-    ctx.textAlign = 'left';
-    const controlsX = 50;
-    let y = 590;
+    const y = 580;
 
     if (isSinglePlayer) {
-      ctx.fillStyle = playerColors[0];
-      ctx.fillText('You: Arrow Keys + / (bomb) + . (special)', controlsX, y);
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-      ctx.fillText('  |  Opponents: AI-controlled', controlsX + 280, y);
+      PixelFont.drawText(ctx, 'YOU: ARROWS + /', 40, y, 1, playerColors[0]);
+      PixelFont.drawText(ctx, 'AI OPPONENTS', 220, y, 1, RETRO_PALETTE.uiLight);
     } else {
       const controls = [
-        'P1: Arrows + /',
-        'P2: WASD + Space',
-        'P3: IJKL + O',
-        'P4: Numpad'
+        'P1:ARROWS',
+        'P2:WASD',
+        'P3:IJKL',
+        'P4:NUMPAD'
       ];
 
-      let currentX = controlsX;
+      let currentX = 40;
       for (let i = 0; i < playerCount; i++) {
-        ctx.fillStyle = playerColors[i];
-        ctx.fillText(controls[i], currentX, y);
-        currentX += ctx.measureText(controls[i]).width + 20;
+        PixelFont.drawText(ctx, controls[i], currentX, y, 1, playerColors[i]);
+        currentX += PixelFont.measureText(controls[i], 1) + 20;
       }
     }
-  }
-
-  private lightenColor(color: string, amount: number): string {
-    const hex = color.replace('#', '');
-    const r = Math.min(255, parseInt(hex.substr(0, 2), 16) + amount);
-    const g = Math.min(255, parseInt(hex.substr(2, 2), 16) + amount);
-    const b = Math.min(255, parseInt(hex.substr(4, 2), 16) + amount);
-    return `rgb(${r}, ${g}, ${b})`;
-  }
-
-  private darkenColor(color: string, amount: number): string {
-    const hex = color.replace('#', '');
-    const r = Math.max(0, parseInt(hex.substr(0, 2), 16) - amount);
-    const g = Math.max(0, parseInt(hex.substr(2, 2), 16) - amount);
-    const b = Math.max(0, parseInt(hex.substr(4, 2), 16) - amount);
-    return `rgb(${r}, ${g}, ${b})`;
   }
 
   renderPaused(): void {
     this.ctx.save();
     this.ctx.scale(this.scale, this.scale);
 
+    // Dark overlay
     this.ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
     this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    // Pulsing effect
-    const pulse = 1 + Math.sin(Date.now() / 400) * 0.05;
+    const centerX = CANVAS_WIDTH / 2;
+    const centerY = CANVAS_HEIGHT / 2;
 
-    this.ctx.save();
-    this.ctx.translate(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
-    this.ctx.scale(pulse, pulse);
+    // "PAUSED" text with blinking cursor
+    const cursorBlink = Math.floor(Date.now() / 500) % 2 === 0;
+    PixelFont.drawTextWithOutline(
+      this.ctx,
+      'PAUSED',
+      centerX,
+      centerY - 30,
+      5,
+      '#ffffff',
+      RETRO_PALETTE.uiBlack
+    );
 
-    this.ctx.shadowColor = 'rgba(255, 255, 255, 0.8)';
-    this.ctx.shadowBlur = 40;
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.font = 'bold 72px Arial';
-    this.ctx.textAlign = 'center';
-    this.ctx.textBaseline = 'middle';
-    this.ctx.fillText('PAUSED', 0, 0);
+    // Blinking cursor underneath
+    if (cursorBlink) {
+      this.ctx.fillStyle = '#ffffff';
+      this.ctx.fillRect(centerX - 15, centerY + 30, 30, 4);
+    }
 
-    this.ctx.restore();
-    this.ctx.shadowBlur = 0;
+    // Instruction text
+    PixelFont.drawTextCentered(this.ctx, 'PRESS ESC TO RESUME', centerX, centerY + 60, 2, '#aaaaaa');
 
-    this.ctx.shadowColor = 'rgba(255, 255, 255, 0.5)';
-    this.ctx.shadowBlur = 15;
-    this.ctx.font = '28px Arial';
-    this.ctx.fillText('Press ESC to resume', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 60);
-    this.ctx.shadowBlur = 0;
     this.ctx.restore();
   }
 

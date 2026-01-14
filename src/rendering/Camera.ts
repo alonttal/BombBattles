@@ -45,8 +45,8 @@ export class Camera {
       decay: true
     },
     playerDeath: {
-      intensity: 6,
-      duration: 0.25,
+      intensity: 10,
+      duration: 0.35, // Longer for more impact
       frequency: 30,
       decay: true
     },
@@ -55,6 +55,12 @@ export class Camera {
       duration: 0.15,
       frequency: 25,
       decay: true
+    },
+    lowTimeWarning: {
+      intensity: 2,
+      duration: 0.1,
+      frequency: 20,
+      decay: false // Constant shake
     }
   };
 
@@ -161,9 +167,9 @@ export class Camera {
     ctx.translate(width / 2, height / 2);
     // Scale
     ctx.scale(this.zoom, this.zoom);
-    // Shake
+    // Shake (pixel-snapped for retro feel)
     if (this.offsetX !== 0 || this.offsetY !== 0) {
-      ctx.translate(this.offsetX, this.offsetY);
+      ctx.translate(Math.floor(this.offsetX), Math.floor(this.offsetY));
     }
     // Translate back
     ctx.translate(-width / 2, -height / 2);

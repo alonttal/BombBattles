@@ -1,11 +1,102 @@
 import { Entity } from './Entity';
-import { TILE_SIZE, COLORS } from '../constants';
+import { RETRO_PALETTE } from '../constants';
 import { EventBus } from '../core/EventBus';
+
+// Pixel sprite for destructible block (wooden crate - 12x10 top + 2 front)
+const WOOD_BLOCK_TOP = [
+  'LLLLLLLLLLLL',
+  'LHHHHHHHHHDL',
+  'LHMMMMMMMMML',
+  'LHMMMMMMMMML',
+  'LHMMDDMMMMML',
+  'LHMMMMMMMMML',
+  'LHMMMMMMDDML',
+  'LHMMMMMMMMML',
+  'LDMMMMMMMMML',
+  'DDDDDDDDDDDD',
+];
+
+const WOOD_BLOCK_FRONT = [
+  'DDDDDDDDDDDD',
+  'DDDDDDDDDDDD',
+];
+
+// Pixel sprite for indestructible wall (stone/metal - 12x10 top + 2 front)
+const WALL_BLOCK_TOP = [
+  'LLLLLLLLLLLL',
+  'LHHHHHHHHHDL',
+  'LHMMMMMMMMML',
+  'LHMMLLMMMMML',
+  'LHMMMMMMMMML',
+  'LHMMMMMMLLML',
+  'LHMMMMMMMMML',
+  'LHMMMMMMMMML',
+  'LDMMMMMMMMML',
+  'DDDDDDDDDDDD',
+];
+
+const WALL_BLOCK_FRONT = [
+  'SSSSSSSSSSSS',
+  'SSSSSSSSSSSS',
+];
+
+// Destruction animation frames (4 frames of crumbling)
+const DESTROY_FRAMES = [
+  // Frame 0 - starting to crack
+  [
+    'LLLLLLLLLLLL',
+    'LHHHH.HHHHDL',
+    'LHMMM.MMMML',
+    'LHM..MMMMML',
+    'LHMMM.MMMML',
+    'LHMMMMMMMML',
+    'LHMMMMMMML',
+    'LDMMMMMMMML',
+    'DDDDDDDDDDDD',
+  ],
+  // Frame 1 - more cracks
+  [
+    'LL.LL..LLLLL',
+    'LH.HH.HH.HDL',
+    'LHM..M.MMML',
+    'LH..M..MMML',
+    'LHM...MMMML',
+    'LH.MMMMM.ML',
+    'LH..MMMM.L',
+    'LD.MMMM..ML',
+    'DD.DDDDD.DDD',
+  ],
+  // Frame 2 - breaking apart
+  [
+    '..LL...L.L..',
+    '.H..H.H..H..',
+    'L.M..M..M..',
+    '..M..M..M..',
+    '.HM...M..M.',
+    '..M..MM....',
+    '.H...M.M...',
+    '....MM...M.',
+    '..D...D..D.',
+  ],
+  // Frame 3 - almost gone
+  [
+    '....L.......',
+    '..H.........',
+    '.....M......',
+    '............',
+    '....M.......',
+    '............',
+    '.........M..',
+    '............',
+    '............',
+  ],
+];
 
 export class Block extends Entity {
   public readonly isDestructible: boolean;
   private destroyAnimationProgress: number = 0;
   private isDestroying: boolean = false;
+  private destroyFrame: number = 0;
 
   constructor(gridX: number, gridY: number, isDestructible: boolean) {
     super(gridX, gridY);
@@ -14,7 +105,8 @@ export class Block extends Entity {
 
   update(deltaTime: number): void {
     if (this.isDestroying) {
-      this.destroyAnimationProgress += deltaTime * 4;
+      this.destroyAnimationProgress += deltaTime * 6; // Faster animation
+      this.destroyFrame = Math.min(3, Math.floor(this.destroyAnimationProgress * 4));
       if (this.destroyAnimationProgress >= 1) {
         this.isActive = false;
       }
@@ -22,122 +114,120 @@ export class Block extends Entity {
   }
 
   render(ctx: CanvasRenderingContext2D, _interpolation: number): void {
-    const x = this.position.pixelX;
-    const y = this.position.pixelY;
-
-    // Pseudo-3D effect: The block "base" is at y+10. The top face is shifted up.
-    // Actually, TILE_SIZE is the footprint. Let's say walls are tall.
-    // We draw the front face (darker) at the bottom, and top face (lighter) above.
-    const height = 8;
+    const x = Math.floor(this.position.pixelX);
+    const y = Math.floor(this.position.pixelY);
+    const pixelSize = 4; // 12 pixels * 4 = 48 (TILE_SIZE)
 
     if (this.isDestroying) {
-      // Destruction animation - crumble and fade
-      const scale = 1 - this.destroyAnimationProgress;
-      const offset = (1 - scale) * TILE_SIZE / 2;
-
-      ctx.save();
-      ctx.globalAlpha = scale;
-
-      // Draw crumbling debris
-      ctx.translate(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
-      ctx.rotate(this.destroyAnimationProgress * Math.PI);
-      ctx.scale(scale, scale);
-
-      ctx.fillStyle = this.isDestructible ? COLORS.softBlock : COLORS.wall;
-      ctx.fillRect(-TILE_SIZE / 2 + offset, -TILE_SIZE / 2 + offset, TILE_SIZE * scale, TILE_SIZE * scale);
-
-      ctx.restore();
-      ctx.globalAlpha = 1;
-
+      this.renderDestroyAnimation(ctx, x, y, pixelSize);
+    } else if (this.isDestructible) {
+      this.renderWoodBlock(ctx, x, y, pixelSize);
     } else {
-      // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.25)';
-      ctx.fillRect(x + 4, y + height + 4, TILE_SIZE - 4, TILE_SIZE - height);
+      this.renderWallBlock(ctx, x, y, pixelSize);
+    }
+  }
 
-      // Front Face (Darker) with gradient
-      const frontGradient = ctx.createLinearGradient(x, y + height, x, y + TILE_SIZE);
-      const baseColor = this.isDestructible ? COLORS.softBlock : COLORS.wall;
-      frontGradient.addColorStop(0, this.getDarkerColor(baseColor));
-      frontGradient.addColorStop(1, this.getDarkerColor(this.getDarkerColor(baseColor)));
-      ctx.fillStyle = frontGradient;
-      ctx.fillRect(x, y + height, TILE_SIZE, TILE_SIZE - height);
+  private renderWoodBlock(ctx: CanvasRenderingContext2D, x: number, y: number, pixelSize: number): void {
+    const palette: Record<string, string> = {
+      'L': RETRO_PALETTE.woodLight,
+      'H': RETRO_PALETTE.woodHighlight,
+      'M': RETRO_PALETTE.woodMid,
+      'D': RETRO_PALETTE.woodDark,
+    };
 
-      // Top Face with subtle gradient (lighter at top-left)
-      const topGradient = ctx.createLinearGradient(x, y, x + TILE_SIZE, y + TILE_SIZE - height);
-      topGradient.addColorStop(0, this.getLighterColor(baseColor));
-      topGradient.addColorStop(0.5, baseColor);
-      topGradient.addColorStop(1, this.getDarkerColor(baseColor));
-      ctx.fillStyle = topGradient;
-      ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE - height);
+    // Draw top face
+    this.drawSprite(ctx, WOOD_BLOCK_TOP, x, y, pixelSize, palette);
 
-      // Top Highlight (Bevel) - brighter
-      ctx.fillStyle = 'rgba(255,255,255,0.35)';
-      ctx.fillRect(x, y, TILE_SIZE, 3);
-      ctx.fillRect(x, y, 3, TILE_SIZE - height);
+    // Draw front face (at bottom)
+    const frontPalette: Record<string, string> = {
+      'D': RETRO_PALETTE.woodDark,
+    };
+    this.drawSprite(ctx, WOOD_BLOCK_FRONT, x, y + 10 * pixelSize, pixelSize, frontPalette);
 
-      // Bottom/Right shadow edge
-      ctx.fillStyle = 'rgba(0,0,0,0.15)';
-      ctx.fillRect(x + TILE_SIZE - 2, y, 2, TILE_SIZE - height);
-      ctx.fillRect(x, y + TILE_SIZE - height - 2, TILE_SIZE, 2);
+    // Draw black outline
+    this.drawBlockOutline(ctx, x, y, 12 * pixelSize, 12 * pixelSize);
+  }
 
-      // Details
-      if (this.isDestructible) {
-        // Wood grain horizontal lines
-        ctx.strokeStyle = 'rgba(139, 90, 43, 0.4)';
-        ctx.lineWidth = 1;
-        for (let i = 1; i < 4; i++) {
-          const lineY = y + (TILE_SIZE - height) * i / 4;
-          ctx.beginPath();
-          ctx.moveTo(x + 2, lineY);
-          ctx.lineTo(x + TILE_SIZE - 2, lineY);
-          ctx.stroke();
-        }
+  private renderWallBlock(ctx: CanvasRenderingContext2D, x: number, y: number, pixelSize: number): void {
+    const palette: Record<string, string> = {
+      'L': RETRO_PALETTE.wallLight,
+      'H': RETRO_PALETTE.wallHighlight,
+      'M': RETRO_PALETTE.wallMid,
+      'D': RETRO_PALETTE.wallDark,
+      'S': '#3a3a4a', // Darker shadow for front
+    };
 
-        // Darker plank separators
-        ctx.fillStyle = 'rgba(0,0,0,0.2)';
-        ctx.fillRect(x, y + (TILE_SIZE - height) / 2 - 1, TILE_SIZE, 2);
+    // Draw top face
+    this.drawSprite(ctx, WALL_BLOCK_TOP, x, y, pixelSize, palette);
 
-        // Corner bolts (metallic look)
-        this.drawBolt(ctx, x + 5, y + 5);
-        this.drawBolt(ctx, x + TILE_SIZE - 7, y + 5);
-        this.drawBolt(ctx, x + 5, y + TILE_SIZE - height - 7);
-        this.drawBolt(ctx, x + TILE_SIZE - 7, y + TILE_SIZE - height - 7);
+    // Draw front face
+    this.drawSprite(ctx, WALL_BLOCK_FRONT, x, y + 10 * pixelSize, pixelSize, palette);
 
-      } else {
-        // Wall - metal plate look
-        ctx.fillStyle = 'rgba(0,0,0,0.1)';
-        ctx.fillRect(x + 8, y + 8, TILE_SIZE - 16, TILE_SIZE - height - 16);
+    // Draw black outline
+    this.drawBlockOutline(ctx, x, y, 12 * pixelSize, 12 * pixelSize);
+  }
 
-        // Cross pattern for wall
-        ctx.strokeStyle = 'rgba(0,0,0,0.15)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(x + 4, y + 4);
-        ctx.lineTo(x + TILE_SIZE - 4, y + TILE_SIZE - height - 4);
-        ctx.moveTo(x + TILE_SIZE - 4, y + 4);
-        ctx.lineTo(x + 4, y + TILE_SIZE - height - 4);
-        ctx.stroke();
+  private renderDestroyAnimation(ctx: CanvasRenderingContext2D, x: number, y: number, pixelSize: number): void {
+    const frame = DESTROY_FRAMES[this.destroyFrame];
+    if (!frame) return;
 
-        // Corner rivets (darker, metallic)
-        this.drawBolt(ctx, x + 5, y + 5);
-        this.drawBolt(ctx, x + TILE_SIZE - 7, y + 5);
-        this.drawBolt(ctx, x + 5, y + TILE_SIZE - height - 7);
-        this.drawBolt(ctx, x + TILE_SIZE - 7, y + TILE_SIZE - height - 7);
+    const palette: Record<string, string> = {
+      'L': RETRO_PALETTE.woodLight,
+      'H': RETRO_PALETTE.woodHighlight,
+      'M': RETRO_PALETTE.woodMid,
+      'D': RETRO_PALETTE.woodDark,
+    };
+
+    // Apply some random offset for shake effect
+    const shakeX = (Math.random() - 0.5) * 4 * (1 - this.destroyAnimationProgress);
+    const shakeY = (Math.random() - 0.5) * 4 * (1 - this.destroyAnimationProgress);
+
+    // Fade out
+    ctx.globalAlpha = 1 - this.destroyAnimationProgress * 0.5;
+
+    this.drawSprite(ctx, frame, x + shakeX, y + shakeY, pixelSize, palette);
+
+    ctx.globalAlpha = 1;
+  }
+
+  private drawSprite(
+    ctx: CanvasRenderingContext2D,
+    sprite: string[],
+    x: number,
+    y: number,
+    pixelSize: number,
+    palette: Record<string, string>
+  ): void {
+    for (let py = 0; py < sprite.length; py++) {
+      const row = sprite[py];
+      for (let px = 0; px < row.length; px++) {
+        const char = row[px];
+        if (char === '.') continue;
+
+        const color = palette[char];
+        if (!color) continue;
+
+        ctx.fillStyle = color;
+        ctx.fillRect(
+          Math.floor(x + px * pixelSize),
+          Math.floor(y + py * pixelSize),
+          pixelSize,
+          pixelSize
+        );
       }
     }
   }
 
-  private getDarkerColor(hex: string): string {
-    // Simple hex darken
-    let r = parseInt(hex.substring(1, 3), 16);
-    let g = parseInt(hex.substring(3, 5), 16);
-    let b = parseInt(hex.substring(5, 7), 16);
-
-    r = Math.floor(r * 0.7);
-    g = Math.floor(g * 0.7);
-    b = Math.floor(b * 0.7);
-
-    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+  private drawBlockOutline(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void {
+    ctx.fillStyle = '#000000';
+    // Top
+    ctx.fillRect(x, y - 1, width, 1);
+    // Bottom
+    ctx.fillRect(x, y + height, width, 1);
+    // Left
+    ctx.fillRect(x - 1, y, 1, height);
+    // Right
+    ctx.fillRect(x + width, y, 1, height);
   }
 
   startDestroy(): void {
@@ -147,37 +237,5 @@ export class Block extends Entity {
       gridX: this.position.gridX,
       gridY: this.position.gridY
     });
-  }
-
-  private getLighterColor(hex: string): string {
-    let r = parseInt(hex.substring(1, 3), 16);
-    let g = parseInt(hex.substring(3, 5), 16);
-    let b = parseInt(hex.substring(5, 7), 16);
-
-    r = Math.min(255, Math.floor(r * 1.2));
-    g = Math.min(255, Math.floor(g * 1.2));
-    b = Math.min(255, Math.floor(b * 1.2));
-
-    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
-  }
-
-  private drawBolt(ctx: CanvasRenderingContext2D, x: number, y: number): void {
-    // Metallic bolt with shine
-    ctx.fillStyle = '#4a4a4a';
-    ctx.beginPath();
-    ctx.arc(x + 2, y + 2, 3, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Bolt highlight
-    ctx.fillStyle = 'rgba(255,255,255,0.4)';
-    ctx.beginPath();
-    ctx.arc(x + 1, y + 1, 1.5, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Bolt shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.beginPath();
-    ctx.arc(x + 3, y + 3, 1, 0, Math.PI * 2);
-    ctx.fill();
   }
 }

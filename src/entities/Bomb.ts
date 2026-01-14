@@ -1,7 +1,50 @@
 import { Entity } from './Entity';
 import { Player, BombType } from './Player';
-import { TILE_SIZE, BOMB_FUSE_TIME, COLORS, Direction } from '../constants';
+import { TILE_SIZE, BOMB_FUSE_TIME, RETRO_PALETTE, Direction } from '../constants';
 import { EventBus } from '../core/EventBus';
+
+// Pixel art bomb sprite (8x8 pixels)
+const BOMB_SPRITE = [
+  '..XXXX..',
+  '.XXXXXX.',
+  'XXXXXXXX',
+  'XLXXXXXX',
+  'XXXXXXXX',
+  'XXXXXXXX',
+  '.XXXXXX.',
+  '..XXXX..',
+];
+
+// Fuse sprite
+const FUSE_SPRITE = [
+  '..F',
+  '.F.',
+  'F..',
+];
+
+// Bomb colors by type
+const BOMB_TYPE_COLORS = {
+  [BombType.NORMAL]: {
+    main: RETRO_PALETTE.bombBody,
+    light: RETRO_PALETTE.bombHighlight,
+    dark: '#111111',
+  },
+  [BombType.FIRE]: {
+    main: RETRO_PALETTE.fireOrange,
+    light: RETRO_PALETTE.fireYellow,
+    dark: RETRO_PALETTE.fireRed,
+  },
+  [BombType.ICE]: {
+    main: RETRO_PALETTE.iceBlue,
+    light: RETRO_PALETTE.iceCyan,
+    dark: RETRO_PALETTE.iceDark,
+  },
+  [BombType.PIERCING]: {
+    main: RETRO_PALETTE.magicPurple,
+    light: RETRO_PALETTE.magicPink,
+    dark: RETRO_PALETTE.magicDark,
+  },
+};
 
 export class Bomb extends Entity {
   public readonly owner: Player;
@@ -80,159 +123,159 @@ export class Bomb extends Entity {
     const x = this.position.pixelX;
     const y = this.position.pixelY;
 
-    // Pulsing effect based on timer (more dramatic)
+    const pixelSize = 4; // Each sprite pixel = 4 screen pixels
+    const colors = BOMB_TYPE_COLORS[this.type];
+
+    // Pulsing effect - toggle between two discrete sizes instead of smooth
     const urgency = 1 - (this.timer / BOMB_FUSE_TIME);
-    const pulseSpeed = 8 + urgency * 16;
-    const pulseScale = 1 + Math.sin(this.pulseTimer * pulseSpeed) * 0.15 * (1 + urgency * 0.5);
-    const size = (TILE_SIZE - 12) * pulseScale;
+    const pulseSpeed = 8 + urgency * 12;
+    const isPulseBig = Math.sin(this.pulseTimer * pulseSpeed) > 0;
+    const scale = isPulseBig ? 1.1 : 1.0;
 
     // Arc offset for punch animation
     let arcOffsetY = 0;
     if (this.isPunched) {
-      // Parabolic arc - highest at middle of flight
       const t = this.punchProgress;
-      arcOffsetY = -Math.sin(t * Math.PI) * 30; // Max height of 30 pixels
+      arcOffsetY = Math.floor(-Math.sin(t * Math.PI) * 30);
     }
 
-    const centerX = x + TILE_SIZE / 2;
-    const centerY = y + TILE_SIZE / 2 + arcOffsetY;
+    const centerX = Math.floor(x + TILE_SIZE / 2);
+    const centerY = Math.floor(y + TILE_SIZE / 2 + arcOffsetY);
 
-    // Shadow
+    // Draw pixel shadow
     ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-    ctx.beginPath();
-    ctx.ellipse(centerX, y + TILE_SIZE - 4, 16, 6, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Danger glow (increases with urgency)
-    if (urgency > 0.3) {
-      const glowIntensity = urgency * 30;
-      const glowColor = this.type === BombType.NORMAL ? '#FF0000' : this.getBombColor();
-      ctx.shadowColor = glowColor;
-      ctx.shadowBlur = glowIntensity;
-
-      // Pulsing danger ring
-      ctx.strokeStyle = glowColor;
-      ctx.globalAlpha = 0.3 + urgency * 0.3;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, size / 2 + 8, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
+    const shadowY = y + TILE_SIZE - 6;
+    for (let px = -3; px <= 3; px++) {
+      const width = Math.abs(px) < 2 ? pixelSize : pixelSize - 2;
+      ctx.fillRect(
+        Math.floor(centerX + px * pixelSize - pixelSize / 2),
+        Math.floor(shadowY),
+        width,
+        4
+      );
     }
 
-    // Bomb body with 3D gradient
-    const bombRadius = size / 2;
-    const bodyGradient = ctx.createRadialGradient(
-      centerX - bombRadius * 0.3, centerY - bombRadius * 0.3, bombRadius * 0.1,
-      centerX, centerY, bombRadius
-    );
+    // Danger indicator - flashing red outline when urgent
+    const showDanger = urgency > 0.3 && Math.sin(this.pulseTimer * 12) > 0;
 
-    const baseColor = this.getBombColor();
-    // Lighter highlight at top-left
-    bodyGradient.addColorStop(0, this.lightenColor(baseColor, 60));
-    bodyGradient.addColorStop(0.3, this.lightenColor(baseColor, 20));
-    bodyGradient.addColorStop(0.7, baseColor);
-    bodyGradient.addColorStop(1, this.darkenColor(baseColor, 40));
+    // Draw bomb sprite
+    const spriteWidth = 8 * pixelSize * scale;
+    const spriteHeight = 8 * pixelSize * scale;
+    const startX = centerX - spriteWidth / 2;
+    const startY = centerY - spriteHeight / 2;
 
-    ctx.shadowColor = baseColor;
-    ctx.shadowBlur = 12;
-    ctx.fillStyle = bodyGradient;
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, bombRadius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
+    const palette: Record<string, string> = {
+      'X': showDanger ? RETRO_PALETTE.fireRed : colors.main,
+      'L': colors.light,
+      'D': colors.dark,
+    };
 
-    // Bold black outline for classic cartoon bomb
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 3;
-    ctx.stroke();
+    // Draw each pixel of the bomb sprite
+    for (let py = 0; py < BOMB_SPRITE.length; py++) {
+      const row = BOMB_SPRITE[py];
+      for (let px = 0; px < row.length; px++) {
+        const char = row[px];
+        if (char === '.') continue;
 
-    // Glossy highlight (main)
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-    ctx.beginPath();
-    ctx.ellipse(centerX - 5, centerY - 6, 6, 4, -0.5, 0, Math.PI * 2);
-    ctx.fill();
+        const color = palette[char];
+        if (!color) continue;
 
-    // Small specular highlight
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-    ctx.beginPath();
-    ctx.arc(centerX - 3, centerY - 9, 2.5, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Flash white right before explosion
-    if (this.timer < 0.5 && Math.sin(this.pulseTimer * 50) > 0.5) {
-      ctx.fillStyle = '#ffffff';
-      ctx.globalAlpha = 0.7;
-      ctx.fill();
+        ctx.fillStyle = color;
+        ctx.fillRect(
+          Math.floor(startX + px * pixelSize * scale),
+          Math.floor(startY + py * pixelSize * scale),
+          Math.ceil(pixelSize * scale),
+          Math.ceil(pixelSize * scale)
+        );
+      }
     }
-    ctx.globalAlpha = 1;
 
-    // Fuse (thicker and more visible)
-    ctx.strokeStyle = '#654321';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(centerX, centerY - size / 2);
-    ctx.lineTo(centerX + 10, centerY - size / 2 - 10);
-    ctx.stroke();
+    // Draw black outline around bomb
+    this.drawBombOutline(ctx, startX, startY, pixelSize * scale);
 
-    // Fuse outline
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 5.5;
-    ctx.globalCompositeOperation = 'destination-over';
-    ctx.beginPath();
-    ctx.moveTo(centerX, centerY - size / 2);
-    ctx.lineTo(centerX + 10, centerY - size / 2 - 10);
-    ctx.stroke();
-    ctx.globalCompositeOperation = 'source-over';
-
-    // Fuse spark (more dramatic)
-    const sparkIntensity = Math.sin(this.pulseTimer * 20);
-    if (sparkIntensity > -0.3) {
-      const sparkSize = 4 + urgency * 3 + Math.max(0, sparkIntensity) * 2;
-
-      // Spark glow
-      ctx.shadowColor = '#FF6600';
-      ctx.shadowBlur = 15;
-
-      ctx.fillStyle = sparkIntensity > 0 ? '#FFF700' : '#FF6600';
-      ctx.beginPath();
-      ctx.arc(centerX + 10, centerY - size / 2 - 10, sparkSize, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.shadowBlur = 0;
-
-      // Spark particles (when urgent)
-      if (urgency > 0.5 && Math.random() > 0.7) {
-        ctx.fillStyle = '#FF8800';
-        ctx.globalAlpha = 0.6;
-        for (let i = 0; i < 3; i++) {
-          const angle = Math.random() * Math.PI * 2;
-          const dist = 5 + Math.random() * 8;
-          ctx.beginPath();
-          ctx.arc(
-            centerX + 10 + Math.cos(angle) * dist,
-            centerY - size / 2 - 10 + Math.sin(angle) * dist,
-            1 + Math.random() * 2,
-            0,
-            Math.PI * 2
+    // Draw fuse
+    const fuseX = centerX + 8 * scale;
+    const fuseY = startY - 4 * scale;
+    ctx.fillStyle = RETRO_PALETTE.bombFuse;
+    for (let py = 0; py < FUSE_SPRITE.length; py++) {
+      const row = FUSE_SPRITE[py];
+      for (let px = 0; px < row.length; px++) {
+        if (row[px] === 'F') {
+          ctx.fillRect(
+            Math.floor(fuseX + px * 3),
+            Math.floor(fuseY + py * 3),
+            3,
+            3
           );
-          ctx.fill();
         }
-        ctx.globalAlpha = 1;
+      }
+    }
+
+    // Draw fuse spark (flickering pixel)
+    const sparkOn = Math.sin(this.pulseTimer * 20) > 0;
+    const sparkColor = sparkOn ? RETRO_PALETTE.fireYellow : RETRO_PALETTE.fireOrange;
+    const sparkX = Math.floor(fuseX + 6);
+    const sparkY = Math.floor(fuseY - 4);
+
+    ctx.fillStyle = sparkColor;
+    // Main spark (2x2 pixels)
+    ctx.fillRect(sparkX, sparkY, 4, 4);
+
+    // Extra spark pixels when urgent
+    if (urgency > 0.5) {
+      ctx.fillStyle = RETRO_PALETTE.fireWhite;
+      ctx.fillRect(sparkX + 1, sparkY + 1, 2, 2);
+
+      // Random spark particles
+      if (Math.random() > 0.6) {
+        ctx.fillStyle = sparkOn ? RETRO_PALETTE.fireYellow : RETRO_PALETTE.fireOrange;
+        const offsets = [[-4, -2], [4, 0], [-2, 4], [2, -4]];
+        const offset = offsets[Math.floor(Math.random() * offsets.length)];
+        ctx.fillRect(sparkX + offset[0], sparkY + offset[1], 2, 2);
+      }
+    }
+
+    // Flash white right before explosion (toggle on/off)
+    if (this.timer < 0.5 && Math.sin(this.pulseTimer * 30) > 0) {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+      for (let py = 0; py < BOMB_SPRITE.length; py++) {
+        const row = BOMB_SPRITE[py];
+        for (let px = 0; px < row.length; px++) {
+          if (row[px] !== '.') {
+            ctx.fillRect(
+              Math.floor(startX + px * pixelSize * scale),
+              Math.floor(startY + py * pixelSize * scale),
+              Math.ceil(pixelSize * scale),
+              Math.ceil(pixelSize * scale)
+            );
+          }
+        }
       }
     }
   }
 
-  private getBombColor(): string {
-    switch (this.type) {
-      case BombType.FIRE:
-        return '#FF4500';
-      case BombType.ICE:
-        return '#00CED1';
-      case BombType.PIERCING:
-        return '#9400D3';
-      default:
-        return COLORS.bomb;
+  private drawBombOutline(ctx: CanvasRenderingContext2D, startX: number, startY: number, pixelSize: number): void {
+    ctx.fillStyle = '#000000';
+
+    for (let py = 0; py < BOMB_SPRITE.length; py++) {
+      const row = BOMB_SPRITE[py];
+      for (let px = 0; px < row.length; px++) {
+        if (row[px] !== '.') {
+          const hasTop = py === 0 || BOMB_SPRITE[py - 1][px] === '.';
+          const hasBottom = py === BOMB_SPRITE.length - 1 || BOMB_SPRITE[py + 1][px] === '.';
+          const hasLeft = px === 0 || row[px - 1] === '.';
+          const hasRight = px === row.length - 1 || row[px + 1] === '.';
+
+          const drawX = Math.floor(startX + px * pixelSize);
+          const drawY = Math.floor(startY + py * pixelSize);
+          const size = Math.ceil(pixelSize);
+
+          if (hasTop) ctx.fillRect(drawX - 1, drawY - 1, size + 2, 1);
+          if (hasBottom) ctx.fillRect(drawX - 1, drawY + size, size + 2, 1);
+          if (hasLeft) ctx.fillRect(drawX - 1, drawY, 1, size);
+          if (hasRight) ctx.fillRect(drawX + size, drawY, 1, size);
+        }
+      }
     }
   }
 
@@ -286,22 +329,4 @@ export class Bomb extends Entity {
     });
   }
 
-  // Color manipulation helpers for gradient effects
-  private lightenColor(color: string, percent: number): string {
-    const num = parseInt(color.replace('#', ''), 16);
-    const amt = Math.round(2.55 * percent);
-    const R = Math.min(255, (num >> 16) + amt);
-    const G = Math.min(255, ((num >> 8) & 0x00FF) + amt);
-    const B = Math.min(255, (num & 0x0000FF) + amt);
-    return `#${(1 << 24 | R << 16 | G << 8 | B).toString(16).slice(1)}`;
-  }
-
-  private darkenColor(color: string, percent: number): string {
-    const num = parseInt(color.replace('#', ''), 16);
-    const amt = Math.round(2.55 * percent);
-    const R = Math.max(0, (num >> 16) - amt);
-    const G = Math.max(0, ((num >> 8) & 0x00FF) - amt);
-    const B = Math.max(0, (num & 0x0000FF) - amt);
-    return `#${(1 << 24 | R << 16 | G << 8 | B).toString(16).slice(1)}`;
-  }
 }

@@ -267,8 +267,6 @@ export class AIController {
 
   private hasPathToEnemy(grid: DangerCell[][], enemy: Player | null, myX: number, myY: number): boolean {
     if (!enemy) return false;
-    const ex = enemy.position.gridX;
-    const ey = enemy.position.gridY;
 
     const queue: DangerCell[] = [grid[myY][myX]];
     const marked = new Set<string>();
@@ -315,7 +313,6 @@ export class AIController {
     // Check if lastDirection is still safe AND doesn't lead to dead-end
     if (this.lastDirection !== null) {
       const lastDirInfo = directions.find(d => d.dir === this.lastDirection);
-      console.log(this.player.playerIndex + " lastDirInfo", lastDirInfo.dir);
       if (lastDirInfo) {
         const nx = myX + lastDirInfo.dx;
         const ny = myY + lastDirInfo.dy;
@@ -582,94 +579,6 @@ export class AIController {
     console.log(this.player.playerIndex + " safe cell not found");
     // Couldn't find any safe cell reachable from this position
     return false;
-  }
-
-  // Check if we can escape after placing a bomb at current location
-  // FIXED: Now uses proper search depth and time-based constraints
-  private canEscapeAfterBomb(grid: DangerCell[][], bombX: number, bombY: number): boolean {
-    const bombRange = this.player.bombRange;
-
-    // Simulate bomb danger
-    const dangerZone = new Set<string>();
-    dangerZone.add(`${bombX},${bombY}`);
-
-    const directions = [
-      {dx: 0, dy: -1},
-      {dx: 0, dy: 1},
-      {dx: -1, dy: 0},
-      {dx: 1, dy: 0}
-    ];
-
-    // Mark all cells that will be dangerous
-    for (const {dx, dy} of directions) {
-      for (let i = 1; i <= bombRange; i++) {
-        const tx = bombX + dx * i;
-        const ty = bombY + dy * i;
-
-        if (tx < 0 || tx >= GRID_WIDTH || ty < 0 || ty >= GRID_HEIGHT) break;
-
-        const cell = grid[ty]?.[tx];
-        // if this cell is not walkable, it means there is something which blocks the path and thus the rest of the
-        // path is not dangerous
-        if (!cell || !cell.isWalkable) break;
-        dangerZone.add(`${tx},${ty}`);
-      }
-    }
-
-    // FIXED: Calculate maximum reachable distance based on player speed and bomb timer
-    const safetyTime = 2.5;
-    const playerSpeed = this.player.getEffectiveSpeed();
-    const maxReachableDistance = Math.floor(playerSpeed * safetyTime);
-
-    // Use BFS to find reachable safe cells
-    // Strategy: We need at least one safe cell to escape to
-    // To avoid dead-ends, we prefer having multiple safe options
-    const queue: {cell: DangerCell; dist: number}[] = [{cell: grid[bombY][bombX], dist: 0}];
-    const marked = new Set<string>();
-    marked.add(`${bombX},${bombY}`);
-    let safeCellsFound = 0;
-
-    while (queue.length > 0 && safeCellsFound < 2) {
-      const {cell, dist} = queue.shift()!;
-
-      for (const {dx, dy} of directions) {
-        const tx = cell.x + dx;
-        const ty = cell.y + dy;
-        const newDist = dist + 1;
-
-        // Bounds check
-        if (tx < 0 || tx >= GRID_WIDTH || ty < 0 || ty >= GRID_HEIGHT) continue;
-
-        const nextCell = grid[ty]?.[tx];
-        if (!nextCell || !nextCell.isWalkable) continue;
-        if (marked.has(`${tx},${ty}`)) continue;
-
-        // CRITICAL: Don't path back through the bomb location itself!
-        if (tx === bombX && ty === bombY) continue;
-
-        // FIXED: Only consider cells reachable in time
-        if (newDist > maxReachableDistance) continue;
-
-        marked.add(`${tx},${ty}`);
-
-        const isSafeFromNewBomb = !dangerZone.has(`${tx},${ty}`);
-        const isSafeFromExisting = nextCell.dangerTime === Infinity;
-
-        // Found a safe cell
-        if (isSafeFromNewBomb && isSafeFromExisting) {
-          safeCellsFound++;
-          if (safeCellsFound >= 2) {
-            return true; // Found multiple safe options, good to go
-          }
-        }
-
-        // Continue searching within reachable range
-        queue.push({cell: nextCell, dist: newDist});
-      }
-    }
-
-    // Accept if we found at least 1 safe cell (for early game when map is open)
-    return safeCellsFound >= 1;
   }
 
   // Count destructible blocks near a position

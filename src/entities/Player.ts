@@ -2,6 +2,7 @@ import { Entity } from './Entity';
 import {
   TILE_SIZE,
   COLORS,
+  RETRO_PALETTE,
   Direction,
   DEFAULT_PLAYER_SPEED,
   DEFAULT_BOMB_COUNT,
@@ -11,6 +12,7 @@ import {
   MAX_SPEED
 } from '../constants';
 import { EventBus } from '../core/EventBus';
+import { PixelArt } from '../rendering/PixelArt';
 
 export enum BombType {
   NORMAL = 'normal',
@@ -20,6 +22,74 @@ export enum BombType {
 }
 
 const PLAYER_COLORS = [COLORS.player1, COLORS.player2, COLORS.player3, COLORS.player4];
+
+// Retro player colors with light/dark variants
+const RETRO_PLAYER_COLORS = [
+  { main: RETRO_PALETTE.player1, light: RETRO_PALETTE.player1Light, dark: RETRO_PALETTE.player1Dark },
+  { main: RETRO_PALETTE.player2, light: RETRO_PALETTE.player2Light, dark: RETRO_PALETTE.player2Dark },
+  { main: RETRO_PALETTE.player3, light: RETRO_PALETTE.player3Light, dark: RETRO_PALETTE.player3Dark },
+  { main: RETRO_PALETTE.player4, light: RETRO_PALETTE.player4Light, dark: RETRO_PALETTE.player4Dark },
+];
+
+// Pixel sprite patterns for player (10x12 pixels, will be scaled)
+// Legend: . = transparent, X = main color, L = light, D = dark, W = white, B = black, E = eye white, P = pupil
+const PLAYER_SPRITES = {
+  // Body only (no eyes) - eyes drawn separately for blinking
+  body: [
+    '...XXXX...',
+    '..XXXXXX..',
+    '.XXXXXXXX.',
+    '.XLXXXXLX.',
+    '.XXXXXXXX.',
+    '.XXXXXXXX.',
+    '..XXXXXX..',
+    '...XXXX...',
+  ],
+  // Feet patterns for walk animation
+  feet: {
+    idle: [
+      '.DDD..DDD.',
+      '.DDD..DDD.',
+    ],
+    walk1: [
+      '..DDD.DDD.',
+      '..DDD.DDD.',
+    ],
+    walk2: [
+      '.DDD...DDD',
+      '.DDD...DDD',
+    ],
+    walk3: [
+      '.DDD.DDD..',
+      '.DDD.DDD..',
+    ],
+    walk4: [
+      'DDD...DDD.',
+      'DDD...DDD.',
+    ],
+  },
+  // Hand positions (relative offsets)
+  hand: [
+    'XX',
+    'XX',
+  ],
+  // Victory pose - arms up
+  victoryArms: [
+    'XX......XX',
+    'XX......XX',
+  ],
+  // Shield ring pattern
+  shield: [
+    '...XXXX...',
+    '.XX....XX.',
+    'X........X',
+    'X........X',
+    'X........X',
+    'X........X',
+    '.XX....XX.',
+    '...XXXX...',
+  ],
+};
 
 export class Player extends Entity {
   public readonly playerIndex: number;
@@ -358,252 +428,234 @@ export class Player extends Entity {
     }
   }
 
-  private drawPlayer(ctx: CanvasRenderingContext2D, x: number, y: number, color: string): void {
-    const bobOffset = this.isMoving ? Math.sin(this.animationFrame * Math.PI / 2) * 2 : 0;
-    const victoryOffset = this.isVictory ? Math.sin(this.victoryTimer) * 5 - 5 : 0;
+  private drawPlayer(ctx: CanvasRenderingContext2D, x: number, y: number, _color: string): void {
+    const colors = RETRO_PLAYER_COLORS[this.playerIndex];
+    const pixelSize = 4; // Each pixel is 4x4 screen pixels
 
-    const cx = x + TILE_SIZE / 2;
-    const cy = y + TILE_SIZE / 2 + bobOffset + victoryOffset;
+    const bobOffset = this.isMoving ? Math.floor(Math.sin(this.animationFrame * Math.PI / 2) * 2) : 0;
+    const victoryOffset = this.isVictory ? Math.floor(Math.sin(this.victoryTimer) * 4) - 4 : 0;
+
+    const cx = Math.floor(x + TILE_SIZE / 2);
+    const cy = Math.floor(y + TILE_SIZE / 2 + bobOffset + victoryOffset);
+
+    // Color palette for sprites
+    const palette: Record<string, string> = {
+      'X': colors.main,
+      'L': colors.light,
+      'D': colors.dark,
+      'W': '#ffffff',
+      'B': '#000000',
+    };
 
     ctx.save();
-    ctx.translate(cx, cy);
-    ctx.scale(this.squashX, this.squashY);
 
-    // Helpers
-    const drawHand = (xOffset: number, yOffset: number, isRightHand: boolean) => {
-      ctx.fillStyle = color;
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-
-      let bx = xOffset;
-      let by = yOffset;
-
-      // Punch logic
-      if (this.isPunching) {
-        let isPunchingHand = false;
-        if (this.direction === Direction.RIGHT && isRightHand) isPunchingHand = true;
-        if (this.direction === Direction.LEFT && !isRightHand) isPunchingHand = true;
-        if (this.direction === Direction.DOWN && isRightHand) isPunchingHand = true;
-        if (this.direction === Direction.UP && !isRightHand) isPunchingHand = true;
-
-        if (isPunchingHand) {
-          const punchProgress = this.punchAnimationTimer / this.punchAnimationDuration;
-          const punchExtend = Math.sin(punchProgress * Math.PI) * 12;
-
-          switch (this.direction) {
-            case Direction.RIGHT: bx += punchExtend; break;
-            case Direction.LEFT: bx -= punchExtend; break;
-            case Direction.UP: by -= punchExtend; break;
-            case Direction.DOWN: by += punchExtend; break;
-          }
+    // Draw shadow (simple pixel ellipse)
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+    const shadowY = y + TILE_SIZE - 8;
+    for (let py = 0; py < 2; py++) {
+      for (let px = -3; px <= 3; px++) {
+        if (Math.abs(px) < 3 || py === 0) {
+          ctx.fillRect(
+            Math.floor(cx + px * pixelSize - pixelSize),
+            Math.floor(shadowY + py * 2),
+            pixelSize,
+            2
+          );
         }
       }
-
-      ctx.arc(bx, by, 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    };
-
-    const drawBody = () => {
-      // Outer glow
-      ctx.shadowColor = color;
-      ctx.shadowBlur = 15;
-
-      // Main body with gradient shading
-      const bodyGradient = ctx.createRadialGradient(-4, -10, 2, 0, 0, 20);
-      bodyGradient.addColorStop(0, this.lightenColor(color, 30)); // Highlight
-      bodyGradient.addColorStop(0.5, color); // Mid
-      bodyGradient.addColorStop(1, this.darkenColor(color, 20)); // Shadow
-
-      ctx.fillStyle = bodyGradient;
-      ctx.beginPath();
-      ctx.arc(0, -4, 16, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      // Bold outline
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 3;
-      ctx.stroke();
-
-      // Rim light (edge highlight)
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(0, -4, 14, -Math.PI * 0.7, -Math.PI * 0.2);
-      ctx.stroke();
-
-      // Top shine
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-      ctx.beginPath();
-      ctx.ellipse(-4, -12, 6, 4, -0.3, 0, Math.PI * 2);
-      ctx.fill();
-    };
-
-    const drawFeet = () => {
-      const footOffset = this.isMoving ? Math.cos(this.animationFrame * Math.PI) * 6 : 0;
-      ctx.fillStyle = color;
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 2;
-
-      // Left Foot
-      ctx.beginPath();
-      ctx.ellipse(-8, 12 + footOffset, 5, 4, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-
-      // Right Foot
-      ctx.beginPath();
-      ctx.ellipse(8, 12 - footOffset, 5, 4, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    };
-
-    // --- Z-Sorting Logic ---
-
-    // Base hand offsets (vertical oscillation)
-    // handOffset was `sin(frame) * 6`
-    // Left uses +offset, Right uses -offset (or vice versa) in previous logic.
-    // Let's use that for standard vertical swing.
-    const swingAmount = this.isMoving ? Math.sin(this.animationFrame * Math.PI) * 6 : 0;
-    let leftHandY = swingAmount;
-    let rightHandY = -swingAmount;
-
-    if (this.isVictory) {
-      leftHandY = -8;
-      rightHandY = -8;
     }
 
-    // Determine Z-Depth
-    // Higher Z = Drawn Later (On Top). Body is Z=0.
+    // Draw feet first (behind body)
+    const feetPattern = this.getFeetPattern();
+    PixelArt.drawSpriteScaled(
+      ctx,
+      cx,
+      cy + 16 * this.squashY,
+      feetPattern,
+      palette,
+      pixelSize,
+      this.squashX,
+      this.squashY
+    );
 
-    let leftHandZ = 0;
-    let rightHandZ = 0;
-    const bodyZ = 0;
+    // Draw hands (some behind, some in front based on direction)
+    const handY = this.isVictory ? -12 : (this.isMoving ? Math.floor(Math.sin(this.animationFrame * Math.PI) * 4) : 0);
+    const leftHandY = handY;
+    const rightHandY = this.isVictory ? -12 : -handY;
 
-    if (this.direction === Direction.UP) {
-      // Walking Away: Generally back, but if we want "interchanging",
-      // we can let the "forward-swinging" arm come in front?
-      // No, for walking away, arms in front of body looks weird. Keep them back.
-      leftHandZ = -1;
-      rightHandZ = -1;
-    } else if (this.direction === Direction.DOWN) {
-      // Walking Towards: Generally front.
-      leftHandZ = 1;
-      rightHandZ = 1;
-    } else {
-      // Side view (Left/Right)
-      // This is where we interchange depth!
-
-      // Determine which arm is swinging "Forward" (into the screen / front of body)
-      // Usually "Front" arm (closest to camera) is Z=1. "Back" arm is Z=-1.
-      // But user wants them to switch.
-
-      const swingPhase = Math.sin(this.animationFrame * Math.PI);
-
-      if (this.direction === Direction.RIGHT) {
-        // Facing Right.
-        // Right Arm is "Front" (14px). Left Arm is "Back" (-14px).
-        // Standard: Right=1, Left=-1.
-        // Interchange: If swing > 0, Right=1. If swing < 0, Right=-1.
-        //              If swing < 0, Left=1.  If swing > 0, Left=-1.
-
-        rightHandZ = swingPhase > 0 ? 1 : -1;
-        leftHandZ = swingPhase < 0 ? 1 : -1;
-
-      } else { // LEFT
-        // Facing Left.
-        // Left Arm is "Front" (-14px). Right Arm is "Back" (14px).
-
-        leftHandZ = swingPhase > 0 ? 1 : -1;
-        rightHandZ = swingPhase < 0 ? 1 : -1;
+    // Punch offset
+    let punchOffsetX = 0;
+    let punchOffsetY = 0;
+    if (this.isPunching) {
+      const punchProgress = this.punchAnimationTimer / this.punchAnimationDuration;
+      const punchExtend = Math.floor(Math.sin(punchProgress * Math.PI) * 8);
+      switch (this.direction) {
+        case Direction.RIGHT: punchOffsetX = punchExtend; break;
+        case Direction.LEFT: punchOffsetX = -punchExtend; break;
+        case Direction.UP: punchOffsetY = -punchExtend; break;
+        case Direction.DOWN: punchOffsetY = punchExtend; break;
       }
     }
 
-    if (!this.isMoving) {
-      // Reset to standard idle layering
-      if (this.direction === Direction.UP) { leftHandZ = -1; rightHandZ = -1; }
-      else if (this.direction === Direction.DOWN) { leftHandZ = 1; rightHandZ = 1; }
-      else if (this.direction === Direction.RIGHT) { leftHandZ = -1; rightHandZ = 1; }
-      else { leftHandZ = 1; rightHandZ = -1; }
+    const drawHand = (offsetX: number, offsetY: number, isPunchHand: boolean) => {
+      const px = isPunchHand ? punchOffsetX : 0;
+      const py = isPunchHand ? punchOffsetY : 0;
+      ctx.fillStyle = colors.main;
+      ctx.fillRect(
+        Math.floor(cx + (offsetX + px) * this.squashX - pixelSize),
+        Math.floor(cy + (offsetY + py) * this.squashY - pixelSize),
+        pixelSize * 2,
+        pixelSize * 2
+      );
+      // Black outline
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(Math.floor(cx + (offsetX + px) * this.squashX - pixelSize - 1), Math.floor(cy + (offsetY + py) * this.squashY - pixelSize - 1), pixelSize * 2 + 2, 1);
+      ctx.fillRect(Math.floor(cx + (offsetX + px) * this.squashX - pixelSize - 1), Math.floor(cy + (offsetY + py) * this.squashY + pixelSize), pixelSize * 2 + 2, 1);
+      ctx.fillRect(Math.floor(cx + (offsetX + px) * this.squashX - pixelSize - 1), Math.floor(cy + (offsetY + py) * this.squashY - pixelSize), 1, pixelSize * 2);
+      ctx.fillRect(Math.floor(cx + (offsetX + px) * this.squashX + pixelSize), Math.floor(cy + (offsetY + py) * this.squashY - pixelSize), 1, pixelSize * 2);
+    };
 
-      leftHandY = 0;
-      rightHandY = 0;
+    // Determine which hand is punching
+    const rightPunches = (this.direction === Direction.RIGHT || this.direction === Direction.DOWN);
+    const leftPunches = (this.direction === Direction.LEFT || this.direction === Direction.UP);
+
+    // Draw back hands first
+    if (this.direction === Direction.LEFT || this.direction === Direction.UP) {
+      drawHand(14, rightHandY, rightPunches && this.isPunching);
+    }
+    if (this.direction === Direction.RIGHT || this.direction === Direction.UP) {
+      drawHand(-14, leftHandY, leftPunches && this.isPunching);
     }
 
-    // Sort and Draw
-    drawFeet(); // Feet always bottom-most layer?
+    // Draw body
+    PixelArt.drawSpriteScaled(
+      ctx,
+      cx,
+      cy - 4 * this.squashY,
+      PLAYER_SPRITES.body,
+      palette,
+      pixelSize,
+      this.squashX,
+      this.squashY
+    );
 
-    const entities = [
-      { id: 'body', z: bodyZ, draw: drawBody },
-      // X offsets: If Facing Right, Right Hand is at +14, Left at -14.
-      // If Facing Left, Left Hand is at -14, Right at +14.
-      // So offsets are constant regardless of facing? Yes, -14 is always Left, +14 is Right relative to sprite center.
-      { id: 'left', z: leftHandZ, draw: () => drawHand(-14, leftHandY, false) },
-      { id: 'right', z: rightHandZ, draw: () => drawHand(14, rightHandY, true) }
-    ];
+    // Draw 1px black outline around body
+    this.drawBodyOutline(ctx, cx, cy - 4 * this.squashY, pixelSize, this.squashX, this.squashY);
 
-    entities.sort((a, b) => a.z - b.z);
-    entities.forEach(e => e.draw());
+    // Draw front hands
+    if (this.direction === Direction.RIGHT || this.direction === Direction.DOWN) {
+      drawHand(14, rightHandY, rightPunches && this.isPunching);
+    }
+    if (this.direction === Direction.LEFT || this.direction === Direction.DOWN) {
+      drawHand(-14, leftHandY, leftPunches && this.isPunching);
+    }
 
-    // Face
-    ctx.fillStyle = '#ffffff';
-    const eyeOffsetX = this.direction === Direction.LEFT ? -4 : this.direction === Direction.RIGHT ? 4 : 0;
-    const eyeOffsetY = this.direction === Direction.UP ? -3 : this.direction === Direction.DOWN ? 2 : 0;
-
+    // Draw face (eyes) - not when facing up
     if (this.direction !== Direction.UP) {
-      this.drawEye(ctx, -5 + eyeOffsetX, -6 + eyeOffsetY);
-      this.drawEye(ctx, 5 + eyeOffsetX, -6 + eyeOffsetY);
+      const eyeOffsetX = this.direction === Direction.LEFT ? -4 : this.direction === Direction.RIGHT ? 4 : 0;
+      const eyeOffsetY = this.direction === Direction.DOWN ? 4 : 0;
+      this.drawPixelEye(ctx, cx - 6 + eyeOffsetX, cy - 8 + eyeOffsetY, pixelSize);
+      this.drawPixelEye(ctx, cx + 6 + eyeOffsetX, cy - 8 + eyeOffsetY, pixelSize);
     }
-
-
 
     ctx.restore();
   }
 
-  private drawEye(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+  private getFeetPattern(): string[] {
+    if (!this.isMoving) return PLAYER_SPRITES.feet.idle;
+    const frame = this.animationFrame % 4;
+    switch (frame) {
+      case 0: return PLAYER_SPRITES.feet.walk1;
+      case 1: return PLAYER_SPRITES.feet.walk2;
+      case 2: return PLAYER_SPRITES.feet.walk3;
+      case 3: return PLAYER_SPRITES.feet.walk4;
+      default: return PLAYER_SPRITES.feet.idle;
+    }
+  }
+
+  private drawBodyOutline(
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    cy: number,
+    pixelSize: number,
+    scaleX: number,
+    scaleY: number
+  ): void {
+    // Draw a simple 1px black outline around the body shape
+    const pattern = PLAYER_SPRITES.body;
+    const height = pattern.length;
+    const width = pattern[0].length;
+    const totalW = width * pixelSize * scaleX;
+    const totalH = height * pixelSize * scaleY;
+    const startX = cx - totalW / 2;
+    const startY = cy - totalH / 2;
+
+    ctx.fillStyle = '#000000';
+
+    for (let py = 0; py < height; py++) {
+      for (let px = 0; px < width; px++) {
+        if (pattern[py][px] !== '.') {
+          // Check if this pixel is on the edge (has a transparent neighbor)
+          const hasTopEdge = py === 0 || pattern[py - 1][px] === '.';
+          const hasBottomEdge = py === height - 1 || pattern[py + 1][px] === '.';
+          const hasLeftEdge = px === 0 || pattern[py][px - 1] === '.';
+          const hasRightEdge = px === width - 1 || pattern[py][px + 1] === '.';
+
+          const drawX = Math.floor(startX + px * pixelSize * scaleX);
+          const drawY = Math.floor(startY + py * pixelSize * scaleY);
+          const drawW = Math.ceil(pixelSize * scaleX);
+          const drawH = Math.ceil(pixelSize * scaleY);
+
+          if (hasTopEdge) ctx.fillRect(drawX - 1, drawY - 1, drawW + 2, 1);
+          if (hasBottomEdge) ctx.fillRect(drawX - 1, drawY + drawH, drawW + 2, 1);
+          if (hasLeftEdge) ctx.fillRect(drawX - 1, drawY, 1, drawH);
+          if (hasRightEdge) ctx.fillRect(drawX + drawW, drawY, 1, drawH);
+        }
+      }
+    }
+  }
+
+  private drawPixelEye(ctx: CanvasRenderingContext2D, x: number, y: number, pixelSize: number): void {
+    const px = Math.floor(x);
+    const py = Math.floor(y);
+    const size = Math.floor(pixelSize * 0.75);
+
     if (this.isBlinking) {
-      ctx.beginPath();
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 2.5;
-      ctx.moveTo(x - 3, y);
-      ctx.lineTo(x + 3, y);
-      ctx.stroke();
+      // Closed eye - horizontal line
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(px - size, py, size * 2, 2);
     } else {
-      // Eye white with outline
-      ctx.beginPath();
+      // Eye white
       ctx.fillStyle = '#ffffff';
-      ctx.arc(x, y, 4.5, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.fillRect(px - size, py - size, size * 2, size * 2);
 
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-
-      // Pupil - shifts based on direction for eye tracking effect
+      // Pupil - shifts based on direction
       let pupilOffsetX = 0;
       let pupilOffsetY = 0;
-
       if (this.isMoving) {
         switch (this.direction) {
-          case Direction.LEFT: pupilOffsetX = -1.5; break;
-          case Direction.RIGHT: pupilOffsetX = 1.5; break;
-          case Direction.UP: pupilOffsetY = -1; break;
-          case Direction.DOWN: pupilOffsetY = 1; break;
+          case Direction.LEFT: pupilOffsetX = -2; break;
+          case Direction.RIGHT: pupilOffsetX = 2; break;
+          case Direction.DOWN: pupilOffsetY = 2; break;
         }
       }
 
       ctx.fillStyle = '#000000';
-      ctx.beginPath();
-      ctx.arc(x + pupilOffsetX, y + pupilOffsetY, 2.5, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.fillRect(
+        px - Math.floor(size / 2) + pupilOffsetX,
+        py - Math.floor(size / 2) + pupilOffsetY,
+        size,
+        size
+      );
 
-      // Eye shine (makes it look alive!) - also shifts with pupil
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-      ctx.beginPath();
-      ctx.arc(x + pupilOffsetX - 0.5, y + pupilOffsetY - 1, 1.2, 0, Math.PI * 2);
-      ctx.fill();
+      // Eye shine (small white pixel)
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(
+        px - Math.floor(size / 2) + pupilOffsetX - 1,
+        py - Math.floor(size / 2) + pupilOffsetY - 1,
+        2,
+        2
+      );
     }
   }
 
@@ -751,24 +803,5 @@ export class Player extends Entity {
 
   canTeleport(): boolean {
     return this.hasAbility('teleport') && this.teleportCharges > 0 && !this.isTeleporting;
-  }
-
-  // Color manipulation helpers
-  private lightenColor(color: string, percent: number): string {
-    const num = parseInt(color.replace('#', ''), 16);
-    const amt = Math.round(2.55 * percent);
-    const R = Math.min(255, (num >> 16) + amt);
-    const G = Math.min(255, ((num >> 8) & 0x00FF) + amt);
-    const B = Math.min(255, (num & 0x0000FF) + amt);
-    return `#${(1 << 24 | R << 16 | G << 8 | B).toString(16).slice(1)}`;
-  }
-
-  private darkenColor(color: string, percent: number): string {
-    const num = parseInt(color.replace('#', ''), 16);
-    const amt = Math.round(2.55 * percent);
-    const R = Math.max(0, (num >> 16) - amt);
-    const G = Math.max(0, ((num >> 8) & 0x00FF) - amt);
-    const B = Math.max(0, (num & 0x0000FF) - amt);
-    return `#${(1 << 24 | R << 16 | G << 8 | B).toString(16).slice(1)}`;
   }
 }
