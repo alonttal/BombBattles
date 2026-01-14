@@ -142,6 +142,11 @@ export class Game {
   }
 
   private updateMainMenu(): void {
+    // Start menu music if not already playing
+    if (!SoundManager.isMenuMusicPlaying()) {
+      SoundManager.startMenuMusic();
+    }
+
     if (this.inputManager.isKeyJustPressed('Space')) {
       SoundManager.play('menuSelect');
       this.startNewGame();
@@ -192,12 +197,7 @@ export class Game {
       }
     }
 
-    // Map selection with [ and ] keys
-    if (this.inputManager.isKeyJustPressed('BracketLeft')) {
-      this.selectedMapIndex = (this.selectedMapIndex - 1 + ALL_MAPS.length) % ALL_MAPS.length;
-      SoundManager.play('menuSelect');
-    }
-    if (this.inputManager.isKeyJustPressed('BracketRight')) {
+    if (this.inputManager.isKeyJustPressed('KeyZ')) {
       this.selectedMapIndex = (this.selectedMapIndex + 1) % ALL_MAPS.length;
       SoundManager.play('menuSelect');
     }
@@ -382,6 +382,7 @@ export class Game {
     }
     if (this.inputManager.isKeyJustPressed('Escape')) {
       this.phase = GamePhase.MAIN_MENU;
+      SoundManager.startMenuMusic();
     }
   }
 
@@ -428,6 +429,9 @@ export class Game {
   }
 
   private startNewGame(): void {
+    // Stop menu music when starting the game
+    SoundManager.stopMenuMusic();
+
     this.initializeGrid();
     this.loadMap(ALL_MAPS[this.selectedMapIndex]);
     this.spawnPlayers();

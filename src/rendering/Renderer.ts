@@ -1230,7 +1230,7 @@ export class Renderer {
     PixelFont.drawText(ctx, '>', CANVAS_WIDTH / 2 + 105 + arrowBounce, mapDisplayY, 2, RETRO_PALETTE.uiGold);
 
     // Hint text
-    PixelFont.drawTextCentered(ctx, 'PRESS [ OR ] TO CHANGE MAP', CANVAS_WIDTH / 2, mapDisplayY + 25, 1, RETRO_PALETTE.uiLight);
+    PixelFont.drawTextCentered(ctx, 'PRESS Z TO CHANGE MAP', CANVAS_WIDTH / 2, mapDisplayY + 25, 1, RETRO_PALETTE.uiLight);
 
     // Player indicators
     const indicatorY = panelY + panelHeight - 50;

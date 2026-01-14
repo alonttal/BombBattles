@@ -35,6 +35,12 @@ class SoundManagerClass {
   private currentBeat: number = 0;
   private musicGainNode: GainNode | null = null;
 
+  // Menu music state
+  private menuMusicPlaying: boolean = false;
+  private menuMusicIntervalId: number | null = null;
+  private menuMusicBeat: number = 0;
+  private menuMusicGainNode: GainNode | null = null;
+
   private getContext(): AudioContext {
     if (!this.audioContext) {
       this.audioContext = new AudioContext();
@@ -955,6 +961,218 @@ class SoundManagerClass {
       this.musicGainNode.gain.setValueAtTime(this.musicGainNode.gain.value, now);
       this.musicGainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
     }
+  }
+
+  // ============ MENU MUSIC SYSTEM ============
+
+  startMenuMusic(): void {
+    if (this.menuMusicPlaying || this.isMusicMuted) return;
+
+    try {
+      const ctx = this.getContext();
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
+
+      this.menuMusicPlaying = true;
+      this.menuMusicBeat = 0;
+
+      // Create master gain for menu music
+      this.menuMusicGainNode = ctx.createGain();
+      this.menuMusicGainNode.gain.value = this.musicVolume * this.masterVolume * 0.7; // Slightly quieter
+      this.menuMusicGainNode.connect(ctx.destination);
+
+      // Slower tempo for menu - 100 BPM (600ms per beat)
+      const beatDuration = 600;
+      this.playMenuMusicBeat();
+      this.menuMusicIntervalId = window.setInterval(() => {
+        this.playMenuMusicBeat();
+      }, beatDuration);
+    } catch (e) {
+      console.warn('Menu music playback failed:', e);
+    }
+  }
+
+  stopMenuMusic(): void {
+    if (!this.menuMusicPlaying) return;
+
+    this.menuMusicPlaying = false;
+    if (this.menuMusicIntervalId !== null) {
+      clearInterval(this.menuMusicIntervalId);
+      this.menuMusicIntervalId = null;
+    }
+
+    // Fade out
+    if (this.menuMusicGainNode && this.audioContext) {
+      const now = this.audioContext.currentTime;
+      this.menuMusicGainNode.gain.setValueAtTime(this.menuMusicGainNode.gain.value, now);
+      this.menuMusicGainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+    }
+  }
+
+  private playMenuMusicBeat(): void {
+    if (!this.menuMusicPlaying || !this.audioContext || !this.menuMusicGainNode) return;
+
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+
+    // Menu music pattern (32 beats = 2 bars, then loop)
+    const beat = this.menuMusicBeat % 32;
+
+    // Ambient pad chords - change every 8 beats
+    if (beat % 8 === 0) {
+      this.playMenuPad(ctx, now, beat);
+    }
+
+    // Soft bass notes - every 4 beats
+    if (beat % 4 === 0) {
+      this.playMenuBass(ctx, now, beat);
+    }
+
+    // Gentle arpeggio melody
+    this.playMenuArpeggio(ctx, now, beat);
+
+    // Soft percussion on some beats
+    if (beat % 2 === 0) {
+      this.playMenuPercussion(ctx, now, beat);
+    }
+
+    this.menuMusicBeat++;
+  }
+
+  private playMenuPad(ctx: AudioContext, time: number, beat: number): void {
+    // Ambient pad chords - Am, F, C, G progression
+    const chordIndex = Math.floor(beat / 8) % 4;
+    const chords = [
+      [220, 261.63, 329.63],  // Am (A3, C4, E4)
+      [174.61, 220, 261.63], // F (F3, A3, C4)
+      [130.81, 164.81, 196], // C (C3, E3, G3)
+      [196, 246.94, 293.66], // G (G3, B3, D4)
+    ];
+
+    const chord = chords[chordIndex];
+
+    chord.forEach((freq) => {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+
+      // Slow attack, long sustain for ambient feel
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0, time);
+      gain.gain.linearRampToValueAtTime(0.08, time + 0.3);
+      gain.gain.setValueAtTime(0.08, time + 4.0);
+      gain.gain.exponentialRampToValueAtTime(0.001, time + 4.5);
+
+      // Add second oscillator slightly detuned for warmth
+      const osc2 = ctx.createOscillator();
+      osc2.type = 'sine';
+      osc2.frequency.value = freq * 1.003; // Slight detune
+
+      osc.connect(gain);
+      osc2.connect(gain);
+      gain.connect(this.menuMusicGainNode!);
+
+      osc.start(time);
+      osc2.start(time);
+      osc.stop(time + 4.5);
+      osc2.stop(time + 4.5);
+    });
+  }
+
+  private playMenuBass(ctx: AudioContext, time: number, beat: number): void {
+    // Deep, soft bass following the chord progression
+    const noteIndex = Math.floor(beat / 8) % 4;
+    const bassNotes = [55, 43.65, 65.41, 49]; // A1, F1, C2, G1
+
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = bassNotes[noteIndex];
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.12, time);
+    gain.gain.exponentialRampToValueAtTime(0.001, time + 2.0);
+
+    // Low-pass filter for smooth bass
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 200;
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.menuMusicGainNode!);
+
+    osc.start(time);
+    osc.stop(time + 2.0);
+  }
+
+  private playMenuArpeggio(ctx: AudioContext, time: number, beat: number): void {
+    // Gentle arpeggio pattern - not every beat
+    const arpeggioPattern: (number | null)[] = [
+      523, null, 659, null, 784, null, 659, null,  // C5, E5, G5, E5
+      440, null, 523, null, 659, null, 523, null,  // A4, C5, E5, C5
+      392, null, 494, null, 587, null, 494, null,  // G4, B4, D5, B4
+      349, null, 440, null, 523, null, 440, null,  // F4, A4, C5, A4
+    ];
+
+    const noteIndex = beat % arpeggioPattern.length;
+    const freq = arpeggioPattern[noteIndex];
+
+    if (freq === null) return;
+
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle'; // Softer than square
+    osc.frequency.value = freq;
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.04, time);
+    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.4);
+
+    // High-pass to keep it airy
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.value = 300;
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.menuMusicGainNode!);
+
+    osc.start(time);
+    osc.stop(time + 0.4);
+  }
+
+  private playMenuPercussion(ctx: AudioContext, time: number, beat: number): void {
+    // Very soft shaker/hi-hat sound
+    const bufferSize = Math.floor(ctx.sampleRate * 0.05);
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+    }
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.value = 8000;
+
+    const gain = ctx.createGain();
+    // Accent on beat 0 and 16
+    const isAccent = beat === 0 || beat === 16;
+    gain.gain.setValueAtTime(isAccent ? 0.03 : 0.015, time);
+    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.menuMusicGainNode!);
+
+    noise.start(time);
+  }
+
+  isMenuMusicPlaying(): boolean {
+    return this.menuMusicPlaying;
   }
 
   private playMusicBeat(): void {
