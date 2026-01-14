@@ -5,6 +5,9 @@ type SoundType =
   | 'explosionFire'
   | 'bombPlace'
   | 'bombKick'
+  | 'bombPunch'
+  | 'bombLand'
+  | 'bombDangerTick'
   | 'powerUp'
   | 'powerUpBad'
   | 'playerDeath'
@@ -13,7 +16,11 @@ type SoundType =
   | 'gameOver'
   | 'menuSelect'
   | 'shieldBreak'
-  | 'teleport';
+  | 'teleport'
+  | 'blockDestroy'
+  | 'footstep'
+  | 'playerPushback'
+  | 'diarrheaBomb';
 
 class SoundManagerClass {
   private audioContext: AudioContext | null = null;
@@ -92,6 +99,27 @@ class SoundManagerClass {
         case 'teleport':
           this.playTeleport(ctx);
           break;
+        case 'bombPunch':
+          this.playBombPunch(ctx);
+          break;
+        case 'bombLand':
+          this.playBombLand(ctx);
+          break;
+        case 'bombDangerTick':
+          this.playBombDangerTick(ctx);
+          break;
+        case 'blockDestroy':
+          this.playBlockDestroy(ctx);
+          break;
+        case 'footstep':
+          this.playFootstep(ctx);
+          break;
+        case 'playerPushback':
+          this.playPlayerPushback(ctx);
+          break;
+        case 'diarrheaBomb':
+          this.playDiarrheaBomb(ctx);
+          break;
       }
     } catch (e) {
       // Silently fail if audio isn't available
@@ -102,53 +130,106 @@ class SoundManagerClass {
   private playExplosion(ctx: AudioContext, volume: number, freq: number, duration: number): void {
     const now = ctx.currentTime;
 
-    // Create noise for explosion
-    const bufferSize = ctx.sampleRate * duration;
+    // Random pitch variation (up to 15%) for variety
+    const pitchVar = 1 + (Math.random() - 0.5) * 0.15;
+    const adjustedFreq = freq * pitchVar;
+    const adjustedDuration = duration * (0.9 + Math.random() * 0.2);
+
+    // LAYER 1: Initial impact transient (sharp attack)
+    const impactOsc = ctx.createOscillator();
+    impactOsc.type = 'sine';
+    impactOsc.frequency.setValueAtTime(200 * pitchVar, now);
+    impactOsc.frequency.exponentialRampToValueAtTime(40, now + 0.05);
+
+    const impactGain = ctx.createGain();
+    impactGain.gain.setValueAtTime(volume * this.masterVolume * 0.8, now);
+    impactGain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+
+    impactOsc.connect(impactGain);
+    impactGain.connect(ctx.destination);
+    impactOsc.start(now);
+    impactOsc.stop(now + 0.08);
+
+    // LAYER 2: Enhanced noise with dual frequency bands
+    const bufferSize = Math.floor(ctx.sampleRate * adjustedDuration);
     const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
     const data = buffer.getChannelData(0);
 
-    // Generate noise with decay
+    // Generate noise with aggressive decay and random crackle
     for (let i = 0; i < bufferSize; i++) {
-      const decay = 1 - (i / bufferSize);
-      data[i] = (Math.random() * 2 - 1) * decay * decay;
+      const t = i / bufferSize;
+      const decay = Math.pow(1 - t, 1.5);
+      const crackle = Math.random() > 0.97 ? 2 : 1;
+      data[i] = (Math.random() * 2 - 1) * decay * crackle;
     }
 
     const noise = ctx.createBufferSource();
     noise.buffer = buffer;
 
     // Low-pass filter for bass rumble
-    const filter = ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(freq, now);
-    filter.frequency.exponentialRampToValueAtTime(50, now + duration);
+    const lowFilter = ctx.createBiquadFilter();
+    lowFilter.type = 'lowpass';
+    lowFilter.frequency.setValueAtTime(adjustedFreq, now);
+    lowFilter.frequency.exponentialRampToValueAtTime(30, now + adjustedDuration);
+    lowFilter.Q.value = 2;
 
-    // Gain envelope
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(volume * this.masterVolume, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+    // High-pass filter for sizzle/crackle
+    const highFilter = ctx.createBiquadFilter();
+    highFilter.type = 'highpass';
+    highFilter.frequency.value = 2000;
 
-    noise.connect(filter);
-    filter.connect(gain);
-    gain.connect(ctx.destination);
+    // Separate gains for low and high
+    const lowGain = ctx.createGain();
+    lowGain.gain.setValueAtTime(volume * this.masterVolume * 0.7, now);
+    lowGain.gain.exponentialRampToValueAtTime(0.001, now + adjustedDuration);
+
+    const highGain = ctx.createGain();
+    highGain.gain.setValueAtTime(volume * this.masterVolume * 0.3, now);
+    highGain.gain.exponentialRampToValueAtTime(0.001, now + adjustedDuration * 0.5);
+
+    // Route noise to both filters
+    noise.connect(lowFilter);
+    lowFilter.connect(lowGain);
+    lowGain.connect(ctx.destination);
+
+    noise.connect(highFilter);
+    highFilter.connect(highGain);
+    highGain.connect(ctx.destination);
 
     noise.start(now);
-    noise.stop(now + duration);
+    noise.stop(now + adjustedDuration);
 
-    // Add a low thump
-    const osc = ctx.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(80, now);
-    osc.frequency.exponentialRampToValueAtTime(20, now + 0.1);
+    // LAYER 3: Sub-bass thump
+    const bassOsc = ctx.createOscillator();
+    bassOsc.type = 'sine';
+    bassOsc.frequency.setValueAtTime(60 * pitchVar, now);
+    bassOsc.frequency.exponentialRampToValueAtTime(15, now + 0.15);
 
-    const oscGain = ctx.createGain();
-    oscGain.gain.setValueAtTime(volume * this.masterVolume * 0.8, now);
-    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+    const bassGain = ctx.createGain();
+    bassGain.gain.setValueAtTime(volume * this.masterVolume, now);
+    bassGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
 
-    osc.connect(oscGain);
-    oscGain.connect(ctx.destination);
+    bassOsc.connect(bassGain);
+    bassGain.connect(ctx.destination);
 
-    osc.start(now);
-    osc.stop(now + 0.1);
+    bassOsc.start(now);
+    bassOsc.stop(now + 0.15);
+
+    // LAYER 4: Mid-range punch
+    const midOsc = ctx.createOscillator();
+    midOsc.type = 'triangle';
+    midOsc.frequency.setValueAtTime(120 * pitchVar, now);
+    midOsc.frequency.exponentialRampToValueAtTime(40, now + 0.12);
+
+    const midGain = ctx.createGain();
+    midGain.gain.setValueAtTime(volume * this.masterVolume * 0.4, now);
+    midGain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+
+    midOsc.connect(midGain);
+    midGain.connect(ctx.destination);
+
+    midOsc.start(now);
+    midOsc.stop(now + 0.12);
   }
 
   private playIceExplosion(ctx: AudioContext): void {
@@ -228,12 +309,13 @@ class SoundManagerClass {
 
   private playBombPlace(ctx: AudioContext): void {
     const now = ctx.currentTime;
+    const pitchVar = 1 + (Math.random() - 0.5) * 0.15;
 
     // Thud sound
     const osc = ctx.createOscillator();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(150, now);
-    osc.frequency.exponentialRampToValueAtTime(50, now + 0.1);
+    osc.frequency.setValueAtTime(150 * pitchVar, now);
+    osc.frequency.exponentialRampToValueAtTime(50 * pitchVar, now + 0.1);
 
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0.3 * this.masterVolume, now);
@@ -248,9 +330,10 @@ class SoundManagerClass {
 
   private playBombKick(ctx: AudioContext): void {
     const now = ctx.currentTime;
+    const pitchVar = 1 + (Math.random() - 0.5) * 0.15;
 
     // Whoosh sound for kick
-    const bufferSize = ctx.sampleRate * 0.15;
+    const bufferSize = Math.floor(ctx.sampleRate * 0.15);
     const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
     const data = buffer.getChannelData(0);
 
@@ -265,8 +348,8 @@ class SoundManagerClass {
 
     const filter = ctx.createBiquadFilter();
     filter.type = 'bandpass';
-    filter.frequency.setValueAtTime(800, now);
-    filter.frequency.linearRampToValueAtTime(300, now + 0.15);
+    filter.frequency.setValueAtTime(800 * pitchVar, now);
+    filter.frequency.linearRampToValueAtTime(300 * pitchVar, now + 0.15);
     filter.Q.value = 2;
 
     const gain = ctx.createGain();
@@ -282,6 +365,7 @@ class SoundManagerClass {
 
   private playPowerUp(ctx: AudioContext): void {
     const now = ctx.currentTime;
+    const pitchVar = 1 + (Math.random() - 0.5) * 0.08;
 
     // Rising arpeggio
     const frequencies = [523, 659, 784, 1047]; // C5, E5, G5, C6
@@ -289,7 +373,7 @@ class SoundManagerClass {
     frequencies.forEach((freq, i) => {
       const osc = ctx.createOscillator();
       osc.type = 'square';
-      osc.frequency.value = freq;
+      osc.frequency.value = freq * pitchVar;
 
       const gain = ctx.createGain();
       const startTime = now + i * 0.05;
@@ -307,6 +391,7 @@ class SoundManagerClass {
 
   private playPowerUpBad(ctx: AudioContext): void {
     const now = ctx.currentTime;
+    const pitchVar = 1 + (Math.random() - 0.5) * 0.1;
 
     // Descending minor sound
     const frequencies = [400, 350, 300, 200];
@@ -314,7 +399,7 @@ class SoundManagerClass {
     frequencies.forEach((freq, i) => {
       const osc = ctx.createOscillator();
       osc.type = 'sawtooth';
-      osc.frequency.value = freq;
+      osc.frequency.value = freq * pitchVar;
 
       const gain = ctx.createGain();
       const startTime = now + i * 0.08;
@@ -440,11 +525,12 @@ class SoundManagerClass {
 
   private playMenuSelect(ctx: AudioContext): void {
     const now = ctx.currentTime;
+    const pitchVar = 1 + (Math.random() - 0.5) * 0.1;
 
     const osc = ctx.createOscillator();
     osc.type = 'square';
-    osc.frequency.setValueAtTime(600, now);
-    osc.frequency.setValueAtTime(800, now + 0.05);
+    osc.frequency.setValueAtTime(600 * pitchVar, now);
+    osc.frequency.setValueAtTime(800 * pitchVar, now + 0.05);
 
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0.1 * this.masterVolume, now);
@@ -484,12 +570,13 @@ class SoundManagerClass {
 
   private playTeleport(ctx: AudioContext): void {
     const now = ctx.currentTime;
+    const pitchVar = 1 + (Math.random() - 0.5) * 0.1;
 
     // Sci-fi swoop
     const osc = ctx.createOscillator();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(200, now);
-    osc.frequency.exponentialRampToValueAtTime(2000, now + 0.3);
+    osc.frequency.setValueAtTime(200 * pitchVar, now);
+    osc.frequency.exponentialRampToValueAtTime(2000 * pitchVar, now + 0.3);
 
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0.2 * this.masterVolume, now);
@@ -500,6 +587,306 @@ class SoundManagerClass {
 
     osc.start(now);
     osc.stop(now + 0.3);
+
+    // Add shimmer overlay
+    const shimmerOsc = ctx.createOscillator();
+    shimmerOsc.type = 'sine';
+    shimmerOsc.frequency.setValueAtTime(400 * pitchVar, now);
+    shimmerOsc.frequency.exponentialRampToValueAtTime(3000 * pitchVar, now + 0.25);
+
+    const shimmerGain = ctx.createGain();
+    shimmerGain.gain.setValueAtTime(0.08 * this.masterVolume, now);
+    shimmerGain.gain.linearRampToValueAtTime(0, now + 0.25);
+
+    shimmerOsc.connect(shimmerGain);
+    shimmerGain.connect(ctx.destination);
+
+    shimmerOsc.start(now);
+    shimmerOsc.stop(now + 0.25);
+  }
+
+  private playBombPunch(ctx: AudioContext): void {
+    const now = ctx.currentTime;
+    const pitchVar = 1 + (Math.random() - 0.5) * 0.1;
+
+    // Whoosh component (quick sweep)
+    const whooshDuration = 0.12;
+    const whooshBuffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * whooshDuration), ctx.sampleRate);
+    const whooshData = whooshBuffer.getChannelData(0);
+
+    for (let i = 0; i < whooshBuffer.length; i++) {
+      const t = i / whooshBuffer.length;
+      const env = Math.sin(t * Math.PI) * (1 - t);
+      whooshData[i] = (Math.random() * 2 - 1) * env;
+    }
+
+    const whoosh = ctx.createBufferSource();
+    whoosh.buffer = whooshBuffer;
+
+    const whooshFilter = ctx.createBiquadFilter();
+    whooshFilter.type = 'bandpass';
+    whooshFilter.frequency.setValueAtTime(1200 * pitchVar, now);
+    whooshFilter.frequency.linearRampToValueAtTime(400, now + whooshDuration);
+    whooshFilter.Q.value = 3;
+
+    const whooshGain = ctx.createGain();
+    whooshGain.gain.setValueAtTime(0.35 * this.masterVolume, now);
+    whooshGain.gain.exponentialRampToValueAtTime(0.001, now + whooshDuration);
+
+    whoosh.connect(whooshFilter);
+    whooshFilter.connect(whooshGain);
+    whooshGain.connect(ctx.destination);
+    whoosh.start(now);
+
+    // Impact thump
+    const impactOsc = ctx.createOscillator();
+    impactOsc.type = 'sine';
+    impactOsc.frequency.setValueAtTime(180 * pitchVar, now);
+    impactOsc.frequency.exponentialRampToValueAtTime(60, now + 0.08);
+
+    const impactGain = ctx.createGain();
+    impactGain.gain.setValueAtTime(0.4 * this.masterVolume, now);
+    impactGain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+
+    impactOsc.connect(impactGain);
+    impactGain.connect(ctx.destination);
+    impactOsc.start(now);
+    impactOsc.stop(now + 0.08);
+  }
+
+  private playBombLand(ctx: AudioContext): void {
+    const now = ctx.currentTime;
+    const pitchVar = 1 + (Math.random() - 0.5) * 0.15;
+
+    // Heavy thud
+    const thudOsc = ctx.createOscillator();
+    thudOsc.type = 'sine';
+    thudOsc.frequency.setValueAtTime(100 * pitchVar, now);
+    thudOsc.frequency.exponentialRampToValueAtTime(35, now + 0.15);
+
+    const thudGain = ctx.createGain();
+    thudGain.gain.setValueAtTime(0.45 * this.masterVolume, now);
+    thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+
+    thudOsc.connect(thudGain);
+    thudGain.connect(ctx.destination);
+    thudOsc.start(now);
+    thudOsc.stop(now + 0.15);
+
+    // Debris scatter noise
+    const noiseBuffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.1), ctx.sampleRate);
+    const noiseData = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < noiseBuffer.length; i++) {
+      const t = i / noiseBuffer.length;
+      noiseData[i] = (Math.random() * 2 - 1) * (1 - t) * (1 - t);
+    }
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuffer;
+
+    const noiseFilter = ctx.createBiquadFilter();
+    noiseFilter.type = 'highpass';
+    noiseFilter.frequency.value = 800;
+
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.15 * this.masterVolume, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(ctx.destination);
+    noise.start(now);
+  }
+
+  private playBombDangerTick(ctx: AudioContext): void {
+    const now = ctx.currentTime;
+    const pitchVar = 1 + (Math.random() - 0.5) * 0.1;
+
+    // Soft warning tick - using sine wave for gentler sound
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = 440 * pitchVar; // Lower frequency, less piercing
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.06 * this.masterVolume, now); // Quieter
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.025);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.025);
+  }
+
+  private playBlockDestroy(ctx: AudioContext): void {
+    const now = ctx.currentTime;
+    const pitchVar = 1 + (Math.random() - 0.5) * 0.2;
+
+    // Crumbling/cracking noise
+    const crumbleDuration = 0.25;
+    const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * crumbleDuration), ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < buffer.length; i++) {
+      const t = i / buffer.length;
+      const decay = Math.pow(1 - t, 1.2);
+      const click = Math.random() > 0.95 ? 2.5 : 1;
+      data[i] = (Math.random() * 2 - 1) * decay * click;
+    }
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    // Bandpass for woody/stone sound
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(800 * pitchVar, now);
+    filter.frequency.exponentialRampToValueAtTime(300, now + crumbleDuration);
+    filter.Q.value = 1.5;
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.3 * this.masterVolume, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + crumbleDuration);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    noise.start(now);
+
+    // Low thump for impact
+    const thumpOsc = ctx.createOscillator();
+    thumpOsc.type = 'sine';
+    thumpOsc.frequency.setValueAtTime(90 * pitchVar, now);
+    thumpOsc.frequency.exponentialRampToValueAtTime(30, now + 0.1);
+
+    const thumpGain = ctx.createGain();
+    thumpGain.gain.setValueAtTime(0.2 * this.masterVolume, now);
+    thumpGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+
+    thumpOsc.connect(thumpGain);
+    thumpGain.connect(ctx.destination);
+    thumpOsc.start(now);
+    thumpOsc.stop(now + 0.1);
+  }
+
+  private playFootstep(ctx: AudioContext): void {
+    const now = ctx.currentTime;
+    const pitchVar = 1 + (Math.random() - 0.5) * 0.3;
+
+    // Very short, subtle tap
+    const duration = 0.04 + Math.random() * 0.02;
+
+    // Noise burst for footstep
+    const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < buffer.length; i++) {
+      const t = i / buffer.length;
+      const env = Math.pow(1 - t, 2);
+      data[i] = (Math.random() * 2 - 1) * env;
+    }
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    // Filter for soft/padded sound
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 400 * pitchVar;
+
+    const gain = ctx.createGain();
+    // Very quiet - subtle footsteps
+    gain.gain.setValueAtTime(0.08 * this.masterVolume, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    noise.start(now);
+  }
+
+  private playPlayerPushback(ctx: AudioContext): void {
+    const now = ctx.currentTime;
+    const pitchVar = 1 + (Math.random() - 0.5) * 0.2;
+
+    // Soft bounce/boing
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(300 * pitchVar, now);
+    osc.frequency.exponentialRampToValueAtTime(150, now + 0.08);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.15 * this.masterVolume, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.08);
+
+    // Quick noise for impact texture
+    const noiseBuffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.03), ctx.sampleRate);
+    const noiseData = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < noiseBuffer.length; i++) {
+      noiseData[i] = (Math.random() * 2 - 1) * (1 - i / noiseBuffer.length);
+    }
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuffer;
+
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.08 * this.masterVolume, now);
+
+    noise.connect(noiseGain);
+    noiseGain.connect(ctx.destination);
+    noise.start(now);
+  }
+
+  private playDiarrheaBomb(ctx: AudioContext): void {
+    const now = ctx.currentTime;
+    const pitchVar = 1 + (Math.random() - 0.5) * 0.2;
+
+    // Wet splat sound
+    const splatDuration = 0.15;
+    const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * splatDuration), ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < buffer.length; i++) {
+      const t = i / buffer.length;
+      const env = Math.sin(t * Math.PI * 0.5) * (1 - t);
+      data[i] = (Math.random() * 2 - 1) * env;
+    }
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(600 * pitchVar, now);
+    filter.frequency.linearRampToValueAtTime(200, now + splatDuration);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.25 * this.masterVolume, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + splatDuration);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    noise.start(now);
+
+    // Descending squelch tone
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(250 * pitchVar, now);
+    osc.frequency.exponentialRampToValueAtTime(80, now + 0.1);
+
+    const oscGain = ctx.createGain();
+    oscGain.gain.setValueAtTime(0.15 * this.masterVolume, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+
+    osc.connect(oscGain);
+    oscGain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.1);
   }
 
   setVolume(volume: number): void {

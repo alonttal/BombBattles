@@ -96,6 +96,7 @@ export class Game {
     EventBus.on('bomb-danger-sparks', this.onBombDangerSparks.bind(this));
     EventBus.on('shield-consumed', this.onShieldConsumed.bind(this));
     EventBus.on('diarrhea-bomb', this.onDiarrheaBomb.bind(this));
+    EventBus.on('player-pushback', this.onPlayerPushback.bind(this));
   }
 
   private initializeGrid(): void {
@@ -855,6 +856,7 @@ export class Game {
   private onDiarrheaBomb(data: { player: Player }): void {
     const player = data.player;
     if (player.isPlayerAlive() && player.canPlaceBomb()) {
+      SoundManager.play('diarrheaBomb');
       this.tryPlaceBomb(player);
     }
   }
@@ -952,7 +954,7 @@ export class Game {
     player.startPunchAnimation();
 
     // Play punch sound
-    SoundManager.play('powerUp'); // Using powerUp sound temporarily
+    SoundManager.play('bombPunch');
 
     // Camera shake
     this.renderer.getCamera().shake({ duration: 0.15, intensity: 3, frequency: 25 });
@@ -999,7 +1001,7 @@ export class Game {
       player.position.pixelX + TILE_SIZE / 2,
       player.position.pixelY + TILE_SIZE / 2
     );
-    // SoundManager.play('teleport'); // Commented out until sound added
+    SoundManager.play('teleport');
   }
 
   private onTeleportArrived(data: { player: Player }): void {
@@ -1018,6 +1020,11 @@ export class Game {
       player.position.pixelX + TILE_SIZE / 2,
       player.position.pixelY + TILE_SIZE - 4
     );
+    SoundManager.play('footstep');
+  }
+
+  private onPlayerPushback(_data: { player: Player }): void {
+    SoundManager.play('playerPushback');
   }
 
   private onPlayerTrail(data: { player: Player }): void {
@@ -1076,6 +1083,7 @@ export class Game {
     const centerX = bomb.position.pixelX + TILE_SIZE / 2;
     const centerY = bomb.position.pixelY + TILE_SIZE / 2;
     this.particleSystem.emitPreset('dangerSparks', centerX, centerY);
+    SoundManager.play('bombDangerTick');
   }
 
   private onShieldConsumed(data: { player: Player }): void {
@@ -1101,6 +1109,9 @@ export class Game {
       gridX * TILE_SIZE + TILE_SIZE / 2,
       gridY * TILE_SIZE + TILE_SIZE / 2
     );
+
+    // Play landing sound
+    SoundManager.play('bombLand');
 
     // Camera shake
     this.renderer.getCamera().shake({ duration: 0.15, intensity: 3, frequency: 25 });
@@ -1331,6 +1342,9 @@ export class Game {
     const centerY = data.gridY * TILE_SIZE + TILE_SIZE / 2;
     const particles = this.renderer.getParticleSystem();
     particles.emitPreset('debris', centerX, centerY);
+
+    // Play block destroy sound
+    SoundManager.play('blockDestroy');
 
     // Maybe spawn a power-up (delayed to avoid being destroyed by the same explosion)
     if (Math.random() < POWERUP_SPAWN_CHANCE) {
