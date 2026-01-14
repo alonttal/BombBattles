@@ -3,7 +3,8 @@ import {Block} from '../entities/Block';
 import {Bomb} from '../entities/Bomb';
 import {PowerUp} from '../entities/PowerUp';
 import {Explosion} from '../entities/Explosion';
-import {Direction, GRID_HEIGHT, GRID_WIDTH, EXPLOSION_DURATION} from '../constants';
+import {Direction, GRID_HEIGHT, GRID_WIDTH, EXPLOSION_DURATION, BOMB_FUSE_TIME} from '../constants';
+import {Pathfinder, GridCell} from './Pathfinder';
 
 interface DangerCell {
   x: number;
@@ -19,6 +20,13 @@ interface DifficultySettings {
   reactionTime: number;
   minBombCooldown: number;
   attackRange: number; // How close to enemy before placing bomb
+  // Strategic settings
+  usePathfinding: boolean;
+  usePrediction: boolean;
+  strategicBlockSelection: boolean;
+  trapLayingEnabled: boolean;
+  areaControlEnabled: boolean;
+  predictionAccuracy: number; // 0-1, how accurate enemy predictions are
 }
 
 const DIFFICULTY_PRESETS: Record<string, DifficultySettings> = {
@@ -26,16 +34,34 @@ const DIFFICULTY_PRESETS: Record<string, DifficultySettings> = {
     reactionTime: 0.3,
     minBombCooldown: 2.5,
     attackRange: 3,
+    usePathfinding: false,
+    usePrediction: false,
+    strategicBlockSelection: false,
+    trapLayingEnabled: false,
+    areaControlEnabled: false,
+    predictionAccuracy: 0,
   },
   medium: {
     reactionTime: 0.15,
     minBombCooldown: 1.5,
     attackRange: 4,
+    usePathfinding: true,
+    usePrediction: true,
+    strategicBlockSelection: true,
+    trapLayingEnabled: false,
+    areaControlEnabled: false,
+    predictionAccuracy: 0.6,
   },
   hard: {
     reactionTime: 0.08,
     minBombCooldown: 0.8,
     attackRange: 5,
+    usePathfinding: true,
+    usePrediction: true,
+    strategicBlockSelection: true,
+    trapLayingEnabled: true,
+    areaControlEnabled: true,
+    predictionAccuracy: 0.9,
   }
 };
 
@@ -48,6 +74,12 @@ export class AIController {
   private lastDirection: Direction | null = null;
   private committedEscapeDirection: Direction | null = null; // Direction committed to after placing bomb
   private escapeCommitTime: number = -10; // When we committed to escape direction
+
+  // Pathfinding state
+  private currentPath: { x: number; y: number }[] | null = null;
+  private pathTargetX: number = -1;
+  private pathTargetY: number = -1;
+  private pathRecalculateTime: number = 0;
 
   constructor(player: Player, difficulty: 'easy' | 'medium' | 'hard' = 'medium') {
     this.player = player;
@@ -118,28 +150,48 @@ export class AIController {
     const isCurrentlySafe = myCell && myCell.dangerTime === Infinity;
 
     if (nearestEnemy && canPlaceBomb && hasPathToEnemy && isCurrentlySafe) {
-      // FIXED: Check if enemy is actually in blast line (not just nearby)
-      const enemyInBlastLine = this.isTargetInBlastLine(
+      // Determine target position (current or predicted)
+      let targetX = nearestEnemy.position.gridX;
+      let targetY = nearestEnemy.position.gridY;
+
+      // For medium/hard: predict where enemy will be when bomb explodes
+      if (this.settings.usePrediction && Math.random() < this.settings.predictionAccuracy) {
+        const prediction = this.predictEnemyPosition(nearestEnemy, BOMB_FUSE_TIME, grid);
+        targetX = prediction.x;
+        targetY = prediction.y;
+      }
+
+      // Check if target position is in blast line
+      const targetInBlastLine = this.isTargetInBlastLine(
         myX,
         myY,
-        nearestEnemy.position.gridX,
-        nearestEnemy.position.gridY,
+        targetX,
+        targetY,
         this.player.bombRange,
         grid
       );
 
-      // If enemy is in blast line and we can escape after placing bomb
-      if (enemyInBlastLine) {
-        // First check if we can find a valid escape direction
+      // If target is in blast line and we can escape after placing bomb
+      if (targetInBlastLine) {
         const escapeDir = this.findEscapeDirectionAfterBomb(grid, myX, myY);
-        // Only place bomb if we found a valid escape route
         if (escapeDir !== null) {
           this.lastBombTime = currentTime;
           this.lastDirection = escapeDir;
-          // COMMIT to this escape direction - don't reconsider until safe!
           this.committedEscapeDirection = escapeDir;
           this.escapeCommitTime = currentTime;
           return {direction: escapeDir, placeBomb: true};
+        }
+      }
+
+      // For hard mode: try to set a trap by moving to cut off escape routes
+      if (this.settings.trapLayingEnabled && !targetInBlastLine) {
+        const trapPos = this.findTrapPosition(nearestEnemy, grid, myX, myY);
+        if (trapPos) {
+          const dir = this.getMoveTowardDirection(trapPos.x, trapPos.y, myX, myY, grid, currentTime);
+          if (dir !== null) {
+            this.lastDirection = dir;
+            return {direction: dir, placeBomb: false};
+          }
         }
       }
     }
@@ -166,7 +218,7 @@ export class AIController {
     // PRIORITY 5: Move toward power-ups
     const nearbyPowerUp = this.findNearbyPowerUp(grid, powerUps, myX, myY);
     if (nearbyPowerUp) {
-      const dir = this.getMoveTowardDirection(nearbyPowerUp.x, nearbyPowerUp.y, myX, myY, grid);
+      const dir = this.getMoveTowardDirection(nearbyPowerUp.x, nearbyPowerUp.y, myX, myY, grid, currentTime);
       this.lastDirection = dir;
       return {direction: dir, placeBomb: false};
     }
@@ -176,19 +228,21 @@ export class AIController {
       const dir = this.getMoveTowardDirection(
         nearestEnemy.position.gridX,
         nearestEnemy.position.gridY,
-        myX, myY, grid
+        myX, myY, grid, currentTime
       );
       this.lastDirection = dir;
       return {direction: dir, placeBomb: false};
     }
 
-    // PRIORITY 7: Move toward nearest destructible block
-    const nearestBlock = this.findNearestDestructibleBlock(blocks, myX, myY);
-    if (nearestBlock) {
+    // PRIORITY 7: Move toward best strategic block (or nearest for easy mode)
+    const targetBlock = this.settings.strategicBlockSelection
+      ? this.findBestStrategicBlock(blocks, myX, myY, grid, players)
+      : this.findNearestDestructibleBlock(blocks, myX, myY);
+    if (targetBlock) {
       const dir = this.getMoveTowardDirection(
-        nearestBlock.position.gridX,
-        nearestBlock.position.gridY,
-        myX, myY, grid
+        targetBlock.position.gridX,
+        targetBlock.position.gridY,
+        myX, myY, grid, currentTime
       );
       this.lastDirection = dir;
       return {direction: dir, placeBomb: false};
@@ -619,6 +673,38 @@ export class AIController {
     targetY: number,
     myX: number,
     myY: number,
+    grid: DangerCell[][],
+    currentTime: number = 0
+  ): Direction | null {
+    // For medium/hard difficulty: use A* pathfinding
+    if (this.settings.usePathfinding && this.needsNewPath(targetX, targetY, currentTime)) {
+      const pathGrid = this.convertToPathfinderGrid(grid);
+      this.currentPath = Pathfinder.findPath(myX, myY, targetX, targetY, pathGrid);
+      this.pathTargetX = targetX;
+      this.pathTargetY = targetY;
+      this.pathRecalculateTime = currentTime;
+    }
+
+    // Try to follow the path if we have one
+    if (this.settings.usePathfinding && this.currentPath && this.currentPath.length > 0) {
+      const pathDir = this.followPath(myX, myY);
+      if (pathDir !== null && this.canMoveSafely(pathDir, myX, myY, grid)) {
+        return pathDir;
+      }
+      // Path is blocked, clear it and fall back to greedy
+      this.currentPath = null;
+    }
+
+    // Greedy fallback (always used for easy, fallback for medium/hard)
+    return this.greedyMoveToward(targetX, targetY, myX, myY, grid);
+  }
+
+  // Greedy movement toward target (original logic)
+  private greedyMoveToward(
+    targetX: number,
+    targetY: number,
+    myX: number,
+    myY: number,
     grid: DangerCell[][]
   ): Direction | null {
     const dx = targetX - myX;
@@ -904,6 +990,345 @@ export class AIController {
     }
 
     return changed;
+  }
+
+  // Convert DangerCell grid to GridCell for Pathfinder
+  private convertToPathfinderGrid(dangerGrid: DangerCell[][]): GridCell[][] {
+    return dangerGrid.map(row => row.map(cell => ({
+      x: cell.x,
+      y: cell.y,
+      isWalkable: cell.isWalkable,
+      isDangerous: cell.dangerTime < Infinity
+    })));
+  }
+
+  // Check if we need to recalculate the path
+  private needsNewPath(targetX: number, targetY: number, currentTime: number): boolean {
+    // Recalculate if target changed
+    if (targetX !== this.pathTargetX || targetY !== this.pathTargetY) {
+      return true;
+    }
+    // Recalculate every 0.5 seconds to adapt to changing dangers
+    if (currentTime - this.pathRecalculateTime > 0.5) {
+      return true;
+    }
+    // Recalculate if path is empty or null
+    if (!this.currentPath || this.currentPath.length === 0) {
+      return true;
+    }
+    return false;
+  }
+
+  // Follow the current path and return the direction to move
+  private followPath(myX: number, myY: number): Direction | null {
+    if (!this.currentPath || this.currentPath.length === 0) {
+      return null;
+    }
+
+    const nextStep = this.currentPath[0];
+
+    // Check if we reached this step
+    if (myX === nextStep.x && myY === nextStep.y) {
+      this.currentPath.shift();
+      if (this.currentPath.length === 0) return null;
+      return this.followPath(myX, myY);
+    }
+
+    // Convert next step to direction
+    const dx = nextStep.x - myX;
+    const dy = nextStep.y - myY;
+
+    if (dy < 0) return Direction.UP;
+    if (dy > 0) return Direction.DOWN;
+    if (dx < 0) return Direction.LEFT;
+    if (dx > 0) return Direction.RIGHT;
+
+    return null;
+  }
+
+  // Predict where an enemy will be after a certain time
+  private predictEnemyPosition(
+    enemy: Player,
+    timeAhead: number,
+    grid: DangerCell[][]
+  ): { x: number; y: number } {
+    const enemyX = enemy.position.gridX;
+    const enemyY = enemy.position.gridY;
+    const speed = enemy.getEffectiveSpeed();
+    const maxTiles = Math.floor(speed * timeAhead);
+
+    // Get enemy's current movement direction
+    const currentDir = enemy.getDirection();
+
+    // Evaluate escape options for the enemy
+    const escapeOptions = this.evaluateEnemyEscapeOptions(enemyX, enemyY, grid, maxTiles, currentDir);
+
+    if (escapeOptions.length === 0) {
+      return { x: enemyX, y: enemyY };
+    }
+
+    // Pick the most likely option (weighted by direction continuity)
+    const best = escapeOptions.reduce((a, b) => a.weight > b.weight ? a : b);
+    return { x: best.x, y: best.y };
+  }
+
+  // Evaluate escape options for an enemy
+  private evaluateEnemyEscapeOptions(
+    startX: number,
+    startY: number,
+    grid: DangerCell[][],
+    maxDist: number,
+    currentDir: Direction | null
+  ): { x: number; y: number; weight: number; direction: Direction }[] {
+    const directions = [
+      { dir: Direction.UP, dx: 0, dy: -1 },
+      { dir: Direction.DOWN, dx: 0, dy: 1 },
+      { dir: Direction.LEFT, dx: -1, dy: 0 },
+      { dir: Direction.RIGHT, dx: 1, dy: 0 }
+    ];
+
+    const options: { x: number; y: number; weight: number; direction: Direction }[] = [];
+
+    for (const { dir, dx, dy } of directions) {
+      let x = startX;
+      let y = startY;
+      let dist = 0;
+
+      // Walk in this direction until blocked or max distance
+      while (dist < maxDist) {
+        const nx = x + dx;
+        const ny = y + dy;
+
+        if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) break;
+
+        const cell = grid[ny]?.[nx];
+        if (!cell || !cell.isWalkable) break;
+
+        x = nx;
+        y = ny;
+        dist++;
+
+        // Stop if we find a safe cell
+        if (cell.dangerTime === Infinity) break;
+      }
+
+      if (dist > 0) {
+        // Weight by safety and direction continuity
+        const cell = grid[y]?.[x];
+        let weight = dist;
+
+        // Prefer continuing current direction
+        if (dir === currentDir) {
+          weight *= 1.5;
+        }
+
+        // Prefer safe cells
+        if (cell && cell.dangerTime === Infinity) {
+          weight *= 2;
+        }
+
+        options.push({ x, y, weight, direction: dir });
+      }
+    }
+
+    return options;
+  }
+
+  // Evaluate strategic value of a block for destruction
+  private evaluateBlockStrategicValue(
+    blockX: number,
+    blockY: number,
+    grid: DangerCell[][],
+    enemies: Player[]
+  ): number {
+    let score = 10; // Base value
+
+    // 1. Chokepoint detection - blocks adjacent to walls/indestructible
+    const adjacentWalls = this.countAdjacentIndestructible(blockX, blockY, grid);
+    score += adjacentWalls * 15;
+
+    // 2. Center control - blocks near map center are more valuable
+    const centerX = Math.floor(GRID_WIDTH / 2);
+    const centerY = Math.floor(GRID_HEIGHT / 2);
+    const distFromCenter = Math.abs(blockX - centerX) + Math.abs(blockY - centerY);
+    score += Math.max(0, 10 - distFromCenter);
+
+    // 3. Path opening - blocks that would create paths to enemies
+    if (this.opensPathToEnemy(blockX, blockY, grid, enemies)) {
+      score += 25;
+    }
+
+    // 4. Corner trap potential
+    if (this.isCornerTrapBlock(blockX, blockY, grid)) {
+      score += 20;
+    }
+
+    return score;
+  }
+
+  // Count adjacent indestructible/wall cells
+  private countAdjacentIndestructible(x: number, y: number, grid: DangerCell[][]): number {
+    const directions = [
+      { dx: 0, dy: -1 },
+      { dx: 0, dy: 1 },
+      { dx: -1, dy: 0 },
+      { dx: 1, dy: 0 }
+    ];
+
+    let count = 0;
+    for (const { dx, dy } of directions) {
+      const nx = x + dx;
+      const ny = y + dy;
+
+      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) {
+        count++; // Edge of map counts as wall
+        continue;
+      }
+
+      const cell = grid[ny]?.[nx];
+      if (cell && !cell.isWalkable && !cell.hasDestructibleBlock) {
+        count++;
+      }
+    }
+
+    return count;
+  }
+
+  // Check if destroying this block would open a path to an enemy
+  private opensPathToEnemy(blockX: number, blockY: number, grid: DangerCell[][], enemies: Player[]): boolean {
+    // Check if there's an enemy on the other side of this block
+    const directions = [
+      { dx: 0, dy: -1 },
+      { dx: 0, dy: 1 },
+      { dx: -1, dy: 0 },
+      { dx: 1, dy: 0 }
+    ];
+
+    for (const enemy of enemies) {
+      if (enemy === this.player || !enemy.isPlayerAlive()) continue;
+
+      const enemyX = enemy.position.gridX;
+      const enemyY = enemy.position.gridY;
+
+      // Check if enemy is roughly in line with this block
+      for (const { dx, dy } of directions) {
+        let x = blockX + dx;
+        let y = blockY + dy;
+
+        for (let i = 0; i < 5; i++) {
+          if (x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT) break;
+
+          if (x === enemyX && y === enemyY) {
+            return true;
+          }
+
+          const cell = grid[y]?.[x];
+          if (cell && !cell.isWalkable) break;
+
+          x += dx;
+          y += dy;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  // Check if this block could be used for corner trapping
+  private isCornerTrapBlock(blockX: number, blockY: number, grid: DangerCell[][]): boolean {
+    // A corner trap block is one that, when destroyed, creates a corner
+    // where an enemy could be trapped
+    const adjacentWalls = this.countAdjacentIndestructible(blockX, blockY, grid);
+    return adjacentWalls >= 2;
+  }
+
+  // Find the best strategic block to destroy
+  private findBestStrategicBlock(
+    blocks: Block[],
+    myX: number,
+    myY: number,
+    grid: DangerCell[][],
+    enemies: Player[]
+  ): Block | null {
+    let bestBlock: Block | null = null;
+    let bestScore = -Infinity;
+
+    for (const block of blocks) {
+      if (!block.isActive || !block.isDestructible) continue;
+
+      const blockX = block.position.gridX;
+      const blockY = block.position.gridY;
+
+      const distance = Math.abs(blockX - myX) + Math.abs(blockY - myY);
+
+      // Only consider blocks within reasonable range
+      if (distance > this.settings.attackRange + 3) continue;
+
+      const strategicValue = this.evaluateBlockStrategicValue(blockX, blockY, grid, enemies);
+
+      // Score = strategic value - distance penalty
+      const distancePenalty = this.settings.areaControlEnabled ? distance * 2 : distance * 5;
+      const score = strategicValue - distancePenalty;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestBlock = block;
+      }
+    }
+
+    return bestBlock;
+  }
+
+  // Find a position to trap an enemy
+  private findTrapPosition(
+    enemy: Player,
+    grid: DangerCell[][],
+    myX: number,
+    myY: number
+  ): { x: number; y: number } | null {
+    const enemyX = enemy.position.gridX;
+    const enemyY = enemy.position.gridY;
+
+    // Get enemy's likely escape routes
+    const escapeRoutes = this.evaluateEnemyEscapeOptions(enemyX, enemyY, grid, 3, enemy.getDirection());
+
+    if (escapeRoutes.length === 0) return null;
+
+    // Find chokepoints that would block the best escape routes
+    const directions = [
+      { dx: 0, dy: -1 },
+      { dx: 0, dy: 1 },
+      { dx: -1, dy: 0 },
+      { dx: 1, dy: 0 }
+    ];
+
+    let bestTrap: { x: number; y: number; value: number } | null = null;
+
+    for (const route of escapeRoutes) {
+      // Check positions along the escape route that we could reach
+      for (const { dx, dy } of directions) {
+        const trapX = route.x + dx;
+        const trapY = route.y + dy;
+
+        if (trapX < 0 || trapX >= GRID_WIDTH || trapY < 0 || trapY >= GRID_HEIGHT) continue;
+
+        const cell = grid[trapY]?.[trapX];
+        if (!cell || !cell.isWalkable || cell.dangerTime < Infinity) continue;
+
+        // Calculate if we can reach this position
+        const distToTrap = Math.abs(trapX - myX) + Math.abs(trapY - myY);
+        if (distToTrap > this.settings.attackRange) continue;
+
+        // Value based on how much this blocks the enemy
+        const value = route.weight * 10 - distToTrap;
+
+        if (!bestTrap || value > bestTrap.value) {
+          bestTrap = { x: trapX, y: trapY, value };
+        }
+      }
+    }
+
+    return bestTrap;
   }
 
   getState(): { currentGoal: string; targetX: number; targetY: number } {

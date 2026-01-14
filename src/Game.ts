@@ -503,18 +503,44 @@ export class Game {
     let newPixelX = player.position.pixelX;
     let newPixelY = player.position.pixelY;
 
+    // Check if player is boxed in on the movement axis
+    const gridX = player.position.gridX;
+    const gridY = player.position.gridY;
+
+    const isBlockedLeft = this.isGridBlocked(gridX - 1, gridY);
+    const isBlockedRight = this.isGridBlocked(gridX + 1, gridY);
+    const isBlockedUp = this.isGridBlocked(gridX, gridY - 1);
+    const isBlockedDown = this.isGridBlocked(gridX, gridY + 1);
+
+    // If boxed in horizontally, snap to grid center X
+    if (isBlockedLeft && isBlockedRight) {
+      newPixelX = gridX * TILE_SIZE;
+    }
+    // If boxed in vertically, snap to grid center Y
+    if (isBlockedUp && isBlockedDown) {
+      newPixelY = gridY * TILE_SIZE;
+    }
+
     switch (direction) {
       case Direction.UP:
-        newPixelY -= moveAmount;
+        if (!(isBlockedUp && isBlockedDown)) {
+          newPixelY -= moveAmount;
+        }
         break;
       case Direction.DOWN:
-        newPixelY += moveAmount;
+        if (!(isBlockedUp && isBlockedDown)) {
+          newPixelY += moveAmount;
+        }
         break;
       case Direction.LEFT:
-        newPixelX -= moveAmount;
+        if (!(isBlockedLeft && isBlockedRight)) {
+          newPixelX -= moveAmount;
+        }
         break;
       case Direction.RIGHT:
-        newPixelX += moveAmount;
+        if (!(isBlockedLeft && isBlockedRight)) {
+          newPixelX += moveAmount;
+        }
         break;
     }
 
@@ -677,22 +703,77 @@ export class Game {
     const offsetX = player.position.pixelX % TILE_SIZE;
     const offsetY = player.position.pixelY % TILE_SIZE;
     const threshold = TILE_SIZE * 0.4;
+    const hitboxPadding = 4;
 
     if (direction === Direction.UP || direction === Direction.DOWN) {
       // Try sliding left or right
       if (offsetX < threshold) {
-        player.position.pixelX -= slideAmount;
+        // Check if sliding left is blocked
+        const testX = player.position.pixelX - slideAmount;
+        if (!this.isPositionBlocked(testX, player.position.pixelY, hitboxPadding)) {
+          player.position.pixelX = testX;
+        }
       } else if (offsetX > TILE_SIZE - threshold) {
-        player.position.pixelX += slideAmount;
+        // Check if sliding right is blocked
+        const testX = player.position.pixelX + slideAmount;
+        if (!this.isPositionBlocked(testX, player.position.pixelY, hitboxPadding)) {
+          player.position.pixelX = testX;
+        }
       }
     } else {
       // Try sliding up or down
       if (offsetY < threshold) {
-        player.position.pixelY -= slideAmount;
+        // Check if sliding up is blocked
+        const testY = player.position.pixelY - slideAmount;
+        if (!this.isPositionBlocked(player.position.pixelX, testY, hitboxPadding)) {
+          player.position.pixelY = testY;
+        }
       } else if (offsetY > TILE_SIZE - threshold) {
-        player.position.pixelY += slideAmount;
+        // Check if sliding down is blocked
+        const testY = player.position.pixelY + slideAmount;
+        if (!this.isPositionBlocked(player.position.pixelX, testY, hitboxPadding)) {
+          player.position.pixelY = testY;
+        }
       }
     }
+  }
+
+  private isGridBlocked(gridX: number, gridY: number): boolean {
+    if (gridX < 0 || gridX >= GRID_WIDTH || gridY < 0 || gridY >= GRID_HEIGHT) {
+      return true;
+    }
+    const entity = this.grid[gridY][gridX];
+    return entity instanceof Block;
+  }
+
+  private isPositionBlocked(pixelX: number, pixelY: number, hitboxPadding: number): boolean {
+    const playerLeft = pixelX + hitboxPadding;
+    const playerRight = pixelX + TILE_SIZE - hitboxPadding;
+    const playerTop = pixelY + hitboxPadding;
+    const playerBottom = pixelY + TILE_SIZE - hitboxPadding;
+
+    const corners = [
+      { x: playerLeft, y: playerTop },
+      { x: playerRight, y: playerTop },
+      { x: playerLeft, y: playerBottom },
+      { x: playerRight, y: playerBottom }
+    ];
+
+    for (const corner of corners) {
+      const gridX = Math.floor(corner.x / TILE_SIZE);
+      const gridY = Math.floor(corner.y / TILE_SIZE);
+
+      if (gridX < 0 || gridX >= GRID_WIDTH || gridY < 0 || gridY >= GRID_HEIGHT) {
+        return true;
+      }
+
+      const entity = this.grid[gridY][gridX];
+      if (entity instanceof Block) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
