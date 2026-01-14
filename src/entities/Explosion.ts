@@ -1,5 +1,5 @@
 import { Entity } from './Entity';
-import { Direction, TILE_SIZE, EXPLOSION_DURATION, EXPLOSION_KILL_DURATION, RETRO_PALETTE } from '../constants';
+import { Direction, TILE_SIZE, EXPLOSION_DURATION, EXPLOSION_KILL_DURATION, FIRE_LINGER_DURATION, RETRO_PALETTE } from '../constants';
 import { BombType } from './Player';
 
 export interface ExplosionTile {
@@ -123,28 +123,63 @@ export class Explosion extends Entity {
   private maxTimer: number = EXPLOSION_DURATION;
   private animFrame: number = 0;
 
+  // Lingering fire support for FIRE bombs
+  private isLingering: boolean = false;
+  private lingerTimer: number = 0;
+
   constructor(tiles: ExplosionTile[], bombType: BombType) {
     const center = tiles.find(t => t.direction === 'center') || tiles[0];
     super(center.gridX, center.gridY);
     this.tiles = tiles;
     this.bombType = bombType;
+
+    // FIRE bombs have extended duration with lingering flames
+    if (bombType === BombType.FIRE) {
+      this.lingerTimer = FIRE_LINGER_DURATION;
+    }
   }
 
   update(deltaTime: number): void {
-    this.timer -= deltaTime;
-    // 4-frame animation cycling
-    this.animFrame = Math.floor((1 - this.timer / this.maxTimer) * 8) % 4;
-    if (this.timer <= 0) {
-      this.destroy();
+    if (this.isLingering) {
+      // In lingering phase - count down linger timer
+      this.lingerTimer -= deltaTime;
+      // Slower animation during linger
+      this.animFrame = Math.floor((this.lingerTimer * 2) % 4);
+      if (this.lingerTimer <= 0) {
+        this.destroy();
+      }
+    } else {
+      // Normal explosion phase
+      this.timer -= deltaTime;
+      // 4-frame animation cycling
+      this.animFrame = Math.floor((1 - this.timer / this.maxTimer) * 8) % 4;
+      if (this.timer <= 0) {
+        // Check if we should enter lingering phase
+        if (this.bombType === BombType.FIRE && this.lingerTimer > 0) {
+          this.isLingering = true;
+        } else {
+          this.destroy();
+        }
+      }
     }
   }
 
   render(ctx: CanvasRenderingContext2D, _interpolation: number): void {
-    const progress = 1 - (this.timer / this.maxTimer);
-    // Stepped alpha fade (3 levels instead of smooth)
-    let alpha = 1;
-    if (progress > 0.7) alpha = 0.6;
-    if (progress > 0.85) alpha = 0.3;
+    let progress: number;
+    let alpha: number;
+
+    if (this.isLingering) {
+      // Lingering phase - fade out over linger duration
+      const lingerProgress = 1 - (this.lingerTimer / FIRE_LINGER_DURATION);
+      progress = 0.5 + lingerProgress * 0.5; // Start at 50% scale, go to 100%
+      alpha = 0.5 - lingerProgress * 0.4; // Start at 50% alpha, fade to 10%
+    } else {
+      progress = 1 - (this.timer / this.maxTimer);
+      // Stepped alpha fade (3 levels instead of smooth)
+      alpha = 1;
+      if (progress > 0.7) alpha = 0.6;
+      if (progress > 0.85) alpha = 0.3;
+    }
 
     ctx.globalAlpha = alpha;
 
@@ -343,6 +378,10 @@ export class Explosion extends Entity {
   }
 
   canKill(): boolean {
+    // Lingering fire can always kill
+    if (this.isLingering) {
+      return true;
+    }
     // The explosion can kill for EXPLOSION_KILL_DURATION seconds
     // Timer counts down from EXPLOSION_DURATION, so elapsed time = EXPLOSION_DURATION - timer
     const elapsedTime = this.maxTimer - this.timer;

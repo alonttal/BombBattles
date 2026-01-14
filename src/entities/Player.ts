@@ -138,6 +138,8 @@ export class Player extends Entity {
 
   // For debuffs
   private debuffs: Map<string, number> = new Map();
+  private diarrheaTimer: number = 0;
+  private diarrheaNextTime: number = 0.5 + Math.random() * 0.5; // Random 0.5-1.0s interval
 
   // Bomb pushback (juicy collision response)
   private pushbackVelocityX: number = 0;
@@ -167,6 +169,18 @@ export class Player extends Entity {
       } else {
         this.debuffs.set(debuff, newTime);
       }
+    }
+
+    // Handle diarrhea debuff - auto-place bombs at random intervals
+    if (this.debuffs.has('diarrhea')) {
+      this.diarrheaTimer += deltaTime;
+      if (this.diarrheaTimer >= this.diarrheaNextTime) {
+        this.diarrheaTimer = 0;
+        this.diarrheaNextTime = 0.5 + Math.random() * 0.5; // Reset with new random interval
+        EventBus.emit('diarrhea-bomb', { player: this });
+      }
+    } else {
+      this.diarrheaTimer = 0; // Reset when debuff ends
     }
 
     // Apply pushback velocity (bomb collision response)
@@ -425,6 +439,58 @@ export class Player extends Entity {
       ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, TILE_SIZE / 2 + 4, 0, Math.PI * 2);
       ctx.stroke();
       ctx.lineWidth = 1;
+    }
+
+    // Debuff indicators above player
+    const activeDebuffs = this.getActiveDebuffs();
+    if (activeDebuffs.length > 0) {
+      this.renderDebuffIndicators(ctx, x, y, activeDebuffs);
+    }
+  }
+
+  private renderDebuffIndicators(ctx: CanvasRenderingContext2D, x: number, y: number, debuffs: string[]): void {
+    const indicatorY = y - 8; // Above player
+    const indicatorSize = 6;
+    const spacing = 8;
+    const totalWidth = debuffs.length * spacing;
+    let startX = x + TILE_SIZE / 2 - totalWidth / 2;
+
+    for (const debuff of debuffs) {
+      let fillColor: string;
+      let strokeColor: string;
+      switch (debuff) {
+        case 'slow':
+          fillColor = '#00ff00'; // Green
+          strokeColor = '#008800';
+          break;
+        case 'reversed':
+          fillColor = '#ff00ff'; // Magenta
+          strokeColor = '#880088';
+          break;
+        case 'tiny_range':
+          fillColor = '#0088ff'; // Blue
+          strokeColor = '#004488';
+          break;
+        case 'diarrhea':
+          fillColor = '#ff8800'; // Orange
+          strokeColor = '#884400';
+          break;
+        case 'frozen':
+          fillColor = '#00ffff'; // Cyan
+          strokeColor = '#008888';
+          break;
+        default:
+          fillColor = '#ffffff';
+          strokeColor = '#888888';
+      }
+
+      // Draw indicator with outline
+      ctx.fillStyle = strokeColor;
+      ctx.fillRect(startX - 1, indicatorY - 1, indicatorSize + 2, indicatorSize + 2);
+      ctx.fillStyle = fillColor;
+      ctx.fillRect(startX, indicatorY, indicatorSize, indicatorSize);
+
+      startX += spacing;
     }
   }
 
@@ -691,10 +757,28 @@ export class Player extends Entity {
   }
 
   getEffectiveSpeed(): number {
+    if (this.debuffs.has('frozen')) {
+      return 0; // Completely frozen by ICE bomb
+    }
     if (this.debuffs.has('slow')) {
       return this.speed * 0.5;
     }
     return this.speed;
+  }
+
+  hasReversedControls(): boolean {
+    return this.debuffs.has('reversed');
+  }
+
+  getActiveDebuffs(): string[] {
+    return Array.from(this.debuffs.keys());
+  }
+
+  getEffectiveBombRange(): number {
+    if (this.debuffs.has('tiny_range')) {
+      return 1; // Minimum range when debuffed
+    }
+    return this.bombRange;
   }
 
   canPlaceBomb(): boolean {

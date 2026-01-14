@@ -21,7 +21,7 @@ import { Bomb } from './entities/Bomb';
 import { Block } from './entities/Block';
 import { Explosion, ExplosionTile } from './entities/Explosion';
 import { PowerUp, PowerUpType } from './entities/PowerUp';
-import { TileType, MapData, CLASSIC_MAP } from './map/TileTypes';
+import { TileType, MapData, ALL_MAPS } from './map/TileTypes';
 import { AIController } from './ai/AIController';
 import { ScoreManager, ScoreEvent } from './core/ScoreManager';
 import { FloatingText } from './rendering/FloatingText';
@@ -56,6 +56,9 @@ export class Game {
   private aiPlayers: Set<number> = new Set();
   private isSinglePlayer: boolean = false;
   private aiDifficulty: 'easy' | 'medium' | 'hard' = 'medium';
+
+  // Map selection
+  private selectedMapIndex: number = 0;
 
   // Grid for collision detection
   private grid: (Block | Bomb | null)[][] = [];
@@ -92,6 +95,7 @@ export class Game {
     EventBus.on('player-speed-lines', this.onPlayerSpeedLines.bind(this));
     EventBus.on('bomb-danger-sparks', this.onBombDangerSparks.bind(this));
     EventBus.on('shield-consumed', this.onShieldConsumed.bind(this));
+    EventBus.on('diarrhea-bomb', this.onDiarrheaBomb.bind(this));
   }
 
   private initializeGrid(): void {
@@ -185,6 +189,16 @@ export class Game {
         this.aiDifficulty = 'hard';
         SoundManager.play('menuSelect');
       }
+    }
+
+    // Map selection with [ and ] keys
+    if (this.inputManager.isKeyJustPressed('BracketLeft')) {
+      this.selectedMapIndex = (this.selectedMapIndex - 1 + ALL_MAPS.length) % ALL_MAPS.length;
+      SoundManager.play('menuSelect');
+    }
+    if (this.inputManager.isKeyJustPressed('BracketRight')) {
+      this.selectedMapIndex = (this.selectedMapIndex + 1) % ALL_MAPS.length;
+      SoundManager.play('menuSelect');
     }
   }
 
@@ -283,6 +297,11 @@ export class Game {
         this.tryPlaceBomb(player);
       }
 
+      // Reverse direction if player has reversed controls debuff
+      if (direction && player.hasReversedControls()) {
+        direction = this.reverseDirection(direction);
+      }
+
       // Apply movement
       if (direction) {
         this.movePlayer(player, direction, deltaTime);
@@ -368,7 +387,7 @@ export class Game {
   private render(interpolation: number): void {
     switch (this.phase) {
       case GamePhase.MAIN_MENU:
-        this.renderer.renderMainMenu(this.playerCount, this.isSinglePlayer, this.aiDifficulty);
+        this.renderer.renderMainMenu(this.playerCount, this.isSinglePlayer, this.aiDifficulty, ALL_MAPS[this.selectedMapIndex]);
         break;
 
       case GamePhase.COUNTDOWN:
@@ -409,7 +428,7 @@ export class Game {
 
   private startNewGame(): void {
     this.initializeGrid();
-    this.loadMap(CLASSIC_MAP);
+    this.loadMap(ALL_MAPS[this.selectedMapIndex]);
     this.spawnPlayers();
     this.bombs = [];
     this.explosions = [];
@@ -801,6 +820,15 @@ export class Game {
     }
   }
 
+  private reverseDirection(dir: Direction): Direction {
+    switch (dir) {
+      case Direction.UP: return Direction.DOWN;
+      case Direction.DOWN: return Direction.UP;
+      case Direction.LEFT: return Direction.RIGHT;
+      case Direction.RIGHT: return Direction.LEFT;
+    }
+  }
+
   private tryPlaceBomb(player: Player): void {
     if (!player.canPlaceBomb()) return;
 
@@ -822,6 +850,13 @@ export class Game {
     const centerY = gridY * TILE_SIZE + TILE_SIZE / 2;
     this.particleSystem.emitPreset('impactBurst', centerX, centerY);
     this.camera.shakePreset('subtle');
+  }
+
+  private onDiarrheaBomb(data: { player: Player }): void {
+    const player = data.player;
+    if (player.isPlayerAlive() && player.canPlaceBomb()) {
+      this.tryPlaceBomb(player);
+    }
   }
 
   private tryPunchBomb(player: Player): void {
@@ -1244,7 +1279,23 @@ export class Game {
         if (!player.isPlayerAlive()) continue;
 
         if (player.position.gridX === tile.gridX && player.position.gridY === tile.gridY) {
-          player.die();
+          // ICE bombs freeze players (if they survive via shield)
+          if (type === BombType.ICE) {
+            const hadShield = player.hasShield();
+            player.die(); // Will consume shield if present
+            if (hadShield && player.isPlayerAlive()) {
+              // Player survived with shield - apply freeze
+              player.applyDebuff('frozen', 3);
+              // Add ice particles on frozen player
+              const particles = this.renderer.getParticleSystem();
+              particles.emitPreset('iceExplosion',
+                player.position.pixelX + TILE_SIZE / 2,
+                player.position.pixelY + TILE_SIZE / 2
+              );
+            }
+          } else {
+            player.die();
+          }
         }
       }
 

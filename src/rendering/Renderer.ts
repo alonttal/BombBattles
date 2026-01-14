@@ -9,6 +9,7 @@ import { ScoreManager } from '../core/ScoreManager';
 import { ParticleSystem } from './ParticleSystem';
 import { Camera } from './Camera';
 import { PixelFont } from './PixelFont';
+import { MapData } from '../map/TileTypes';
 
 export interface RenderState {
   players: Player[];
@@ -835,7 +836,7 @@ export class Renderer {
     this.ctx.restore();
   }
 
-  renderMainMenu(playerCount: number = 2, isSinglePlayer: boolean = false, aiDifficulty: 'easy' | 'medium' | 'hard' = 'medium'): void {
+  renderMainMenu(playerCount: number = 2, isSinglePlayer: boolean = false, aiDifficulty: 'easy' | 'medium' | 'hard' = 'medium', selectedMap?: MapData): void {
     this.ctx.save();
     this.ctx.scale(this.scale, this.scale);
     const time = Date.now();
@@ -857,12 +858,12 @@ export class Renderer {
     this.drawBouncyTitle(time);
 
     // Mode selection panel
-    this.drawMenuPanel(time, playerCount, isSinglePlayer, aiDifficulty);
+    this.drawMenuPanel(time, playerCount, isSinglePlayer, aiDifficulty, selectedMap);
 
     // Start instruction - blinking text
     const blink = Math.floor(time / 500) % 2 === 0;
     if (blink) {
-      PixelFont.drawTextCentered(this.ctx, 'PRESS SPACE TO START', CANVAS_WIDTH / 2, 540, 2, RETRO_PALETTE.uiGold);
+      PixelFont.drawTextCentered(this.ctx, 'PRESS SPACE TO START', CANVAS_WIDTH / 2, 555, 2, RETRO_PALETTE.uiGold);
     }
 
     // Controls at bottom
@@ -1117,12 +1118,12 @@ export class Renderer {
     PixelFont.drawTextCentered(ctx, 'CLASSIC ARENA ACTION', CANVAS_WIDTH / 2, baseY + 60, 2, RETRO_PALETTE.uiLight);
   }
 
-  private drawMenuPanel(time: number, playerCount: number, isSinglePlayer: boolean, aiDifficulty: 'easy' | 'medium' | 'hard'): void {
+  private drawMenuPanel(time: number, playerCount: number, isSinglePlayer: boolean, aiDifficulty: 'easy' | 'medium' | 'hard', selectedMap?: MapData): void {
     const ctx = this.ctx;
     const panelX = CANVAS_WIDTH / 2 - 180;
     const panelY = 150;
     const panelWidth = 360;
-    const panelHeight = 320;
+    const panelHeight = 390; // Increased height for map selection
     const border = 4;
 
     // Panel background - solid color with pixel border
@@ -1149,6 +1150,9 @@ export class Renderer {
     this.drawPixelButton(ctx, CANVAS_WIDTH / 2 - 100, modeY, 90, 40, 'SINGLE', 'S', isSinglePlayer, time, 0);
     this.drawPixelButton(ctx, CANVAS_WIDTH / 2 + 10, modeY, 90, 40, 'MULTI', 'M', !isSinglePlayer, time, 1);
 
+    // Mode switch hint
+    PixelFont.drawTextCentered(ctx, 'S/M TO SWITCH MODE', CANVAS_WIDTH / 2, modeY + 48, 1, RETRO_PALETTE.uiLight);
+
     // Options section
     const optionsY = panelY + 140;
 
@@ -1165,6 +1169,9 @@ export class Renderer {
         const isSelected = aiDifficulty === difficulties[i];
         this.drawPixelButton(ctx, startX + i * spacing - 40, diffY, 80, 36, diffLabels[i], String(i + 1), isSelected, time, i + 2);
       }
+
+      // Difficulty hint
+      PixelFont.drawTextCentered(ctx, '1/2/3 TO CHANGE', CANVAS_WIDTH / 2, diffY + 44, 1, RETRO_PALETTE.uiLight);
     } else {
       PixelFont.drawTextCentered(ctx, 'PLAYERS', CANVAS_WIDTH / 2, optionsY, 2, RETRO_PALETTE.uiWhite);
 
@@ -1199,10 +1206,34 @@ export class Renderer {
         // Number
         PixelFont.drawTextCentered(ctx, String(i), px + size / 2, py + offsetY + 12, 3, RETRO_PALETTE.uiWhite);
       }
+
+      // Player count hint
+      PixelFont.drawTextCentered(ctx, '< > OR 2/3/4 TO CHANGE', CANVAS_WIDTH / 2, buttonY + size + 8, 1, RETRO_PALETTE.uiLight);
     }
 
+    // Map selection section
+    const mapY = panelY + 240;
+    PixelFont.drawTextCentered(ctx, 'MAP', CANVAS_WIDTH / 2, mapY, 2, RETRO_PALETTE.uiWhite);
+
+    // Map name with arrows
+    const mapName = selectedMap?.name || 'Classic Arena';
+    const mapDisplayY = mapY + 30;
+
+    // Left arrow
+    const arrowBounce = Math.floor(time / 300) % 2 === 0 ? 0 : 2;
+    PixelFont.drawText(ctx, '<', CANVAS_WIDTH / 2 - 120 - arrowBounce, mapDisplayY, 2, RETRO_PALETTE.uiGold);
+
+    // Map name
+    PixelFont.drawTextCentered(ctx, mapName.toUpperCase(), CANVAS_WIDTH / 2, mapDisplayY, 2, RETRO_PALETTE.fireOrange);
+
+    // Right arrow
+    PixelFont.drawText(ctx, '>', CANVAS_WIDTH / 2 + 105 + arrowBounce, mapDisplayY, 2, RETRO_PALETTE.uiGold);
+
+    // Hint text
+    PixelFont.drawTextCentered(ctx, 'PRESS [ OR ] TO CHANGE MAP', CANVAS_WIDTH / 2, mapDisplayY + 25, 1, RETRO_PALETTE.uiLight);
+
     // Player indicators
-    const indicatorY = panelY + panelHeight - 60;
+    const indicatorY = panelY + panelHeight - 50;
     const playerColors = [
       RETRO_PALETTE.player1,
       RETRO_PALETTE.player2,
@@ -1286,14 +1317,14 @@ export class Renderer {
     const y = 580;
 
     if (isSinglePlayer) {
-      PixelFont.drawText(ctx, 'YOU: ARROWS + /', 40, y, 1, playerColors[0]);
-      PixelFont.drawText(ctx, 'AI OPPONENTS', 220, y, 1, RETRO_PALETTE.uiLight);
+      PixelFont.drawText(ctx, 'YOU: ARROWS  BOMB: /', 40, y, 1, playerColors[0]);
+      PixelFont.drawText(ctx, 'AI OPPONENTS', 260, y, 1, RETRO_PALETTE.uiLight);
     } else {
       const controls = [
-        'P1:ARROWS',
-        'P2:WASD',
-        'P3:IJKL',
-        'P4:NUMPAD'
+        'P1:ARROWS /',
+        'P2:WASD SPACE',
+        'P3:IJKL O',
+        'P4:NUM 0'
       ];
 
       let currentX = 40;

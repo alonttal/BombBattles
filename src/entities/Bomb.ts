@@ -77,7 +77,7 @@ export class Bomb extends Entity {
     super(gridX, gridY);
     this.owner = owner;
     this.type = owner.bombType;
-    this.range = owner.bombRange;
+    this.range = owner.getEffectiveBombRange();
     this.timer = BOMB_FUSE_TIME;
   }
 

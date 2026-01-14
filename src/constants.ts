@@ -23,6 +23,7 @@ export const MAX_SPEED = 6;
 export const BOMB_FUSE_TIME = 3.0; // seconds
 export const EXPLOSION_DURATION = 0.5; // seconds
 export const EXPLOSION_KILL_DURATION = 0.4; // seconds - how long flames can kill (100ms less than visual duration)
+export const FIRE_LINGER_DURATION = 2.0; // seconds - additional time FIRE bombs linger
 
 // Power-up spawn chance when block is destroyed
 export const POWERUP_SPAWN_CHANCE = 0.35;
