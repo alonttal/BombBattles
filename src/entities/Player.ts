@@ -134,7 +134,7 @@ export class Player extends Entity {
   public teleportPhase: 'out' | 'in' = 'out';
   public teleportProgress: number = 0;
   public teleportTarget: { gridX: number, gridY: number } | null = null;
-  private readonly teleportDuration: number = 0.4; // 0.4s out, 0.4s in
+  private readonly teleportDuration: number = 0.1; // 0.1s out, 0.1s in (faster for bomb pass-through)
 
   // For debuffs
   private debuffs: Map<string, number> = new Map();

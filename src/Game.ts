@@ -287,10 +287,6 @@ export class Game {
           this.tryPunchBomb(player);
         }
 
-        // Check for teleport input
-        if (this.inputManager.isTeleportPressed(player.playerIndex)) {
-          this.tryTeleport(player);
-        }
       }
 
       // Apply bomb placement BEFORE movement to ensure consistency with AI grid simulation
@@ -622,6 +618,15 @@ export class Game {
         );
 
         if (movingTowardsBomb) {
+          // Check if player can teleport through the bomb
+          if (player.canTeleport()) {
+            const targetTile = this.getOppositeTileFromBomb(entity, direction);
+            if (targetTile && this.isTileClearForTeleport(targetTile.gridX, targetTile.gridY)) {
+              player.useTeleport(targetTile.gridX, targetTile.gridY);
+              continue; // Skip pushback, let teleport happen
+            }
+          }
+
           // Player is trying to ENTER the bomb - block and apply juicy pushback
           canMove = false;
           const pushDirX = playerCenterX - bombCenterX;
@@ -1049,34 +1054,53 @@ export class Game {
     // Event handling is done in tryPlaceBomb
   }
 
-  private tryTeleport(player: Player): void {
-    if (!player.canTeleport()) return;
+  private getOppositeTileFromBomb(bomb: Bomb, direction: Direction): { gridX: number; gridY: number } {
+    const bombGridX = bomb.position.gridX;
+    const bombGridY = bomb.position.gridY;
 
-    // Determine target based on direction (3-4 tiles ahead)
-    const direction = player.getDirection();
-    const distance = 4;
-    let targetX = player.position.gridX;
-    let targetY = player.position.gridY;
+    // Calculate the tile on the opposite side of the bomb from the player
+    let targetX = bombGridX;
+    let targetY = bombGridY;
 
     switch (direction) {
-      case Direction.UP: targetY -= distance; break;
-      case Direction.DOWN: targetY += distance; break;
-      case Direction.LEFT: targetX -= distance; break;
-      case Direction.RIGHT: targetX += distance; break;
+      case Direction.UP:
+        targetY = bombGridY - 1;
+        break;
+      case Direction.DOWN:
+        targetY = bombGridY + 1;
+        break;
+      case Direction.LEFT:
+        targetX = bombGridX - 1;
+        break;
+      case Direction.RIGHT:
+        targetX = bombGridX + 1;
+        break;
     }
 
-    // Clamp to bounds
-    targetX = Math.max(1, Math.min(GRID_WIDTH - 2, targetX));
-    targetY = Math.max(1, Math.min(GRID_HEIGHT - 2, targetY));
+    return { gridX: targetX, gridY: targetY };
+  }
 
-    // Refile if target is blocked (find nearest empty)
-    // Simple check: is target empty?
-    if (this.grid[targetY] && !this.grid[targetY][targetX]) {
-      // Valid empty tile
-      player.useTeleport(targetX, targetY);
-    } else {
-      // Play error sound?
+  private isTileClearForTeleport(gridX: number, gridY: number): boolean {
+    // Bounds check
+    if (gridX < 0 || gridX >= GRID_WIDTH || gridY < 0 || gridY >= GRID_HEIGHT) {
+      return false;
     }
+
+    // Check grid for obstacles
+    const entity = this.grid[gridY][gridX];
+
+    // Block (wall or destructible) blocks teleport
+    if (entity instanceof Block) {
+      return false;
+    }
+
+    // Another bomb blocks teleport
+    if (entity instanceof Bomb) {
+      return false;
+    }
+
+    // Tile is clear
+    return true;
   }
 
   private onTeleportStart(data: { player: Player }): void {
