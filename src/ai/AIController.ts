@@ -1,9 +1,9 @@
-import {Player} from '../entities/Player';
+import {Player, BombType} from '../entities/Player';
 import {Block} from '../entities/Block';
 import {Bomb} from '../entities/Bomb';
 import {PowerUp} from '../entities/PowerUp';
 import {Explosion} from '../entities/Explosion';
-import {Direction, GRID_HEIGHT, GRID_WIDTH, EXPLOSION_DURATION, BOMB_FUSE_TIME} from '../constants';
+import {Direction, GRID_HEIGHT, GRID_WIDTH, EXPLOSION_DURATION, BOMB_FUSE_TIME, FIRE_LINGER_DURATION} from '../constants';
 import {Pathfinder, GridCell} from './Pathfinder';
 
 interface DangerCell {
@@ -14,6 +14,7 @@ interface DangerCell {
   hasBomb: boolean;
   hasPowerUp: boolean;
   hasDestructibleBlock: boolean;
+  hasIceDanger: boolean; // Ice bombs freeze players who survive via shield
 }
 
 interface DifficultySettings {
@@ -71,6 +72,7 @@ export class AIController {
   private settings: DifficultySettings;
   private lastDecisionTime: number = 0;
   private lastBombTime: number = -10;
+  private gameStartTime: number = 0;
   private lastDirection: Direction | null = null;
   private committedEscapeDirection: Direction | null = null; // Direction committed to after placing bomb
   private escapeCommitTime: number = -10; // When we committed to escape direction
@@ -96,6 +98,11 @@ export class AIController {
     powerUps: PowerUp[],
     players: Player[]
   ): { direction: Direction | null; placeBomb: boolean } {
+    // Initialize game start time on first update
+    if (this.gameStartTime === 0) {
+      this.gameStartTime = currentTime;
+    }
+
     // Rate limit decisions
     const shouldThink = currentTime - this.lastDecisionTime >= this.settings.reactionTime;
     if (!shouldThink) {
@@ -112,11 +119,42 @@ export class AIController {
     // PRIORITY 1: Escape from danger (check FIRST, even during commitment!)
     // If we're in danger, we MUST escape - commitment can't block this
     if (myCell && myCell.dangerTime < Infinity) {
+      // CRITICAL FIX: Trust the escape commitment with smart timing
+      const timeSinceCommit = currentTime - this.escapeCommitTime;
+      if (this.committedEscapeDirection !== null && timeSinceCommit < 2.5) {
+        // During escape commitment, check if we can PHYSICALLY move (not blocked by wall/bomb)
+        // Don't check if the cell is safe - we already calculated escape before placing bomb
+        // The escape path may pass through our own bomb's danger zone initially
+        const canPhysicallyMove = this.canPhysicallyMove(this.committedEscapeDirection, myX, myY, grid);
+
+        if (canPhysicallyMove) {
+          // Trust the commitment - keep moving in the committed direction
+          this.lastDirection = this.committedEscapeDirection;
+          return {direction: this.committedEscapeDirection, placeBomb: false};
+        }
+
+        // Committed direction is physically blocked (wall/bomb) - try turning perpendicular
+        console.log(`${this.player.playerIndex} committed dir ${this.committedEscapeDirection} blocked at (${myX},${myY}), trying turns`);
+        const perpDirs = this.getPerpendicularDirections(this.committedEscapeDirection);
+        for (const turnDir of perpDirs) {
+          const canTurn = this.canPhysicallyMove(turnDir, myX, myY, grid);
+          console.log(`${this.player.playerIndex} checking turn ${turnDir}: ${canTurn}`);
+          if (canTurn) {
+            console.log(`${this.player.playerIndex} turning from ${this.committedEscapeDirection} to ${turnDir}`);
+            this.lastDirection = turnDir;
+            return {direction: turnDir, placeBomb: false};
+          }
+        }
+        console.log(`${this.player.playerIndex} no valid turns, recalculating`);
+        // All perpendicular directions blocked too - fall through to recalculate
+      }
+
+      // No recent commitment, or commitment is old - recalculate escape direction
       const escapeDir = this.findSafeDirection(grid, myX, myY);
       console.log(this.player.playerIndex + " " + escapeDir);
       this.lastDirection = escapeDir;
 
-      // If we were committed but still in danger, the commitment was wrong - clear it
+      // If we were committed but still in danger after 1 second, the commitment was wrong - clear it
       if (this.committedEscapeDirection !== null) {
         this.committedEscapeDirection = null;
       }
@@ -198,10 +236,26 @@ export class AIController {
 
     // PRIORITY 4: Look for destructible blocks to bomb
     if (canPlaceBomb && isCurrentlySafe) {
+      // CRITICAL FIX FOR EASY MODE: Don't place bombs for first 1.5 seconds
+      // This gives time to move one step away from spawn before placing first bomb
+      // The spawn point then becomes a safe escape route!
+      const timeSinceGameStart = currentTime - this.gameStartTime;
+      console.log(`${this.player.playerIndex} time since start: ${timeSinceGameStart.toFixed(2)}s, at (${myX},${myY})`);
+      if (this.difficulty === 'easy' && timeSinceGameStart < 1.5) {
+        console.log(`${this.player.playerIndex} too early for bombs, moving away`);
+        // Move away from spawn to set up a safe bombing position
+        const moveAwayDir = this.getMoveAwayFromWalls(grid, myX, myY);
+        if (moveAwayDir) {
+          this.lastDirection = moveAwayDir;
+          return {direction: moveAwayDir, placeBomb: false};
+        }
+      }
+
       const nearbyBlocks = this.countNearbyDestructibleBlocks(grid, myX, myY);
       if (nearbyBlocks > 0) {
-        // First check if we can find a valid escape direction
+        // Check if we can find a valid escape direction
         const escapeDir = this.findEscapeDirectionAfterBomb(grid, myX, myY);
+
         // Only place bomb if we found a valid escape route
         if (escapeDir !== null) {
           this.lastBombTime = currentTime;
@@ -412,17 +466,26 @@ export class AIController {
     }
 
     // If no safe direction, find the one with most time remaining
+    // Deprioritize ice danger zones if AI has shield (ice freezes shielded players)
     let bestDir: Direction | null = null;
     let bestTime = -Infinity;
+    let bestHasIceDanger = true;
 
     for (const {dir, dx, dy} of directions) {
       const nx = myX + dx;
       const ny = myY + dy;
       const cell = grid[ny]?.[nx];
 
-      if (cell && cell.isWalkable && cell.dangerTime > bestTime) {
-        bestTime = cell.dangerTime;
-        bestDir = dir;
+      if (cell && cell.isWalkable) {
+        const hasIce = this.shouldAvoidIceDanger(cell);
+        // Prefer non-ice danger zones when AI has shield
+        const isBetter = (!hasIce && bestHasIceDanger) ||
+                         (hasIce === bestHasIceDanger && cell.dangerTime > bestTime);
+        if (isBetter) {
+          bestTime = cell.dangerTime;
+          bestDir = dir;
+          bestHasIceDanger = hasIce;
+        }
       }
     }
 
@@ -433,9 +496,11 @@ export class AIController {
   // Uses BFS to match the logic in canEscapeAfterBomb
   private findEscapeDirectionAfterBomb(grid: DangerCell[][], bombX: number, bombY: number): Direction | null {
     const bombRange = this.player.bombRange;
+    const bombType = this.player.bombType;
 
-    // Simulate bomb danger zone (same as canEscapeAfterBomb)
+    // Simulate bomb danger zone
     const dangerZone = new Set<string>();
+    // NOTE: The bomb's own position IS dangerous (you can't stand on the bomb)
     dangerZone.add(`${bombX},${bombY}`);
 
     const directions = [
@@ -446,7 +511,9 @@ export class AIController {
     ];
 
     // Mark all cells in blast range as dangerous
+    // Account for piercing bombs which go through up to 2 destructible blocks per direction
     for (const {dx, dy} of directions) {
+      let blocksPierced = 0;
       for (let i = 1; i <= bombRange; i++) {
         const tx = bombX + dx * i;
         const ty = bombY + dy * i;
@@ -454,7 +521,19 @@ export class AIController {
         if (tx < 0 || tx >= GRID_WIDTH || ty < 0 || ty >= GRID_HEIGHT) break;
 
         const cell = grid[ty]?.[tx];
-        if (!cell || !cell.isWalkable) break;
+        // Blast stops at non-walkable cells (but marks them as dangerous if destructible)
+        if (!cell || !cell.isWalkable) {
+          if (cell && cell.hasDestructibleBlock) {
+            dangerZone.add(`${tx},${ty}`);
+            // Piercing bombs can pierce through up to 2 destructible blocks
+            if (bombType === BombType.PIERCING) {
+              blocksPierced++;
+              if (blocksPierced >= 2) break;
+              continue; // Continue to next tile
+            }
+          }
+          break;
+        }
         dangerZone.add(`${tx},${ty}`);
       }
     }
@@ -465,6 +544,9 @@ export class AIController {
     let bestX = 0;
     let bestY = 0;
 
+    const canPassThroughBombs = this.player.canTeleport() || this.player.hasAbility('kick');
+    const playerSpeed = this.player.getEffectiveSpeed();
+
     for (const {dir, dx, dy} of directions) {
       const firstX = bombX + dx;
       const firstY = bombY + dy;
@@ -472,10 +554,43 @@ export class AIController {
       // Check if we can even move in this direction
       if (firstX < 0 || firstX >= GRID_WIDTH || firstY < 0 || firstY >= GRID_HEIGHT) continue;
       const firstCell = grid[firstY]?.[firstX];
-      if (!firstCell || !firstCell.isWalkable) continue;
+      if (!firstCell) continue;
 
-      // Use BFS starting from this first cell to count reachable safe cells
-      // The first cell CAN be in the danger zone - we just need to reach safety eventually
+      // Check if first cell is passable
+      if (!firstCell.isWalkable) {
+        // If it's a bomb and we can pass through bombs, check timing
+        if (firstCell.hasBomb && canPassThroughBombs) {
+          const timeToReach = 1 / playerSpeed; // 1 tile distance
+          // Need enough time to pass through before bomb explodes (0.5s safety margin)
+          if (firstCell.dangerTime <= timeToReach + 0.5) {
+            continue; // Not enough time, skip this direction
+          }
+          // Can pass through this bomb - continue checking this direction
+        } else {
+          continue; // Can't pass through this cell
+        }
+      }
+
+      // Allow escape through cells even if they're momentarily in danger,
+      // as long as we can reach safety via BFS (includes turning)
+      // The time delay ensures we're not at spawn when placing bombs
+
+      // CRITICAL: Check if first cell is in danger zone
+      if (dangerZone.has(`${firstX},${firstY}`)) {
+        // First cell is dangerous! Only allow if we can turn to safety immediately
+        const canTurn = this.canTurnToSafetyAfterFirstStep(grid, firstX, firstY, dangerZone, dir);
+        if (!canTurn) {
+          console.log(`${this.player.playerIndex} rejecting ${dir} - first cell (${firstX},${firstY}) in danger with no turn`);
+          continue;
+        }
+        console.log(`${this.player.playerIndex} allowing ${dir} despite first cell danger - can turn`);
+      }
+
+      // Count how many cells we can move straight before hitting a wall or block
+      const straightLineClearance = this.countStraightLineClearance(grid, firstX, firstY, dir);
+
+      // Use BFS to check if this direction leads to reachable safe cells
+      // The escape commitment system (2.5s trust period) will keep us moving in this direction
       const safeCellsReachable = this.countReachableSafeCellsFromDirection(
         grid,
         firstX,
@@ -487,7 +602,11 @@ export class AIController {
 
       // Pick the direction that leads to the most safe cells
       // CRITICAL: Only consider directions that actually lead to at least 1 safe cell
-      if (safeCellsReachable > 0 && safeCellsReachable > bestSafeCells) {
+      // Prefer directions with more straight-line clearance (less likely to get stuck)
+      const score = safeCellsReachable * 10 + straightLineClearance;
+      const bestScore = bestSafeCells * 10 + (bestDir ? this.countStraightLineClearance(grid, bestX, bestY, bestDir) : 0);
+
+      if (safeCellsReachable > 0 && score > bestScore) {
         bestSafeCells = safeCellsReachable;
         bestDir = dir;
         bestX = firstX;
@@ -500,8 +619,266 @@ export class AIController {
     return bestDir;
   }
 
+  // Check if we can turn to safety after taking the first step in a direction
+  // This allows escaping through danger zones if we can quickly turn to safety
+  private canTurnToSafetyAfterFirstStep(
+    grid: DangerCell[][],
+    firstX: number,
+    firstY: number,
+    dangerZone: Set<string>,
+    initialDir: Direction
+  ): boolean {
+    // Get perpendicular directions (directions we can turn to)
+    const perpendicularDirs = this.getPerpendicularDirections(initialDir);
+
+    for (const dir of perpendicularDirs) {
+      const dirMap = {
+        [Direction.UP]: { dx: 0, dy: -1 },
+        [Direction.DOWN]: { dx: 0, dy: 1 },
+        [Direction.LEFT]: { dx: -1, dy: 0 },
+        [Direction.RIGHT]: { dx: 1, dy: 0 }
+      };
+
+      const { dx, dy } = dirMap[dir];
+      const turnX = firstX + dx;
+      const turnY = firstY + dy;
+
+      if (turnX < 0 || turnX >= GRID_WIDTH || turnY < 0 || turnY >= GRID_HEIGHT) continue;
+
+      const turnCell = grid[turnY]?.[turnX];
+      if (!turnCell || !turnCell.isWalkable) continue;
+
+      // Check if this turn cell is safe
+      const isSafeFromNewBomb = !dangerZone.has(`${turnX},${turnY}`);
+      const isSafeFromExisting = turnCell.dangerTime === Infinity;
+
+      if (isSafeFromNewBomb && isSafeFromExisting) {
+        return true; // Found a safe cell by turning!
+      }
+    }
+
+    return false; // No safe turn available
+  }
+
+  // Get directions perpendicular to the given direction
+  private getPerpendicularDirections(dir: Direction): Direction[] {
+    switch (dir) {
+      case Direction.UP:
+      case Direction.DOWN:
+        return [Direction.LEFT, Direction.RIGHT];
+      case Direction.LEFT:
+      case Direction.RIGHT:
+        return [Direction.UP, Direction.DOWN];
+    }
+  }
+
+  // Count how many adjacent cells are walls or out of bounds
+  private countAdjacentWalls(x: number, y: number, grid: DangerCell[][]): number {
+    const directions = [
+      { dx: 0, dy: -1 },
+      { dx: 0, dy: 1 },
+      { dx: -1, dy: 0 },
+      { dx: 1, dy: 0 }
+    ];
+
+    let wallCount = 0;
+    for (const { dx, dy } of directions) {
+      const nx = x + dx;
+      const ny = y + dy;
+
+      // Out of bounds or non-walkable = wall
+      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) {
+        wallCount++;
+        continue;
+      }
+
+      const cell = grid[ny]?.[nx];
+      if (!cell || !cell.isWalkable) {
+        wallCount++;
+      }
+    }
+
+    return wallCount;
+  }
+
+  // Find a direction that moves away from walls (toward open space)
+  private getMoveAwayFromWalls(grid: DangerCell[][], myX: number, myY: number): Direction | null {
+    const directions = [
+      { dir: Direction.UP, dx: 0, dy: -1 },
+      { dir: Direction.DOWN, dx: 0, dy: 1 },
+      { dir: Direction.LEFT, dx: -1, dy: 0 },
+      { dir: Direction.RIGHT, dx: 1, dy: 0 }
+    ];
+
+    let bestDir: Direction | null = null;
+    let bestClearance = -1;
+
+    for (const { dir, dx, dy } of directions) {
+      const nx = myX + dx;
+      const ny = myY + dy;
+
+      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
+
+      const cell = grid[ny]?.[nx];
+      if (!cell || !cell.isWalkable || cell.dangerTime < Infinity) continue;
+
+      // Count clearance in this direction
+      const clearance = this.countStraightLineClearance(grid, nx, ny, dir);
+
+      if (clearance > bestClearance) {
+        bestClearance = clearance;
+        bestDir = dir;
+      }
+    }
+
+    return bestDir;
+  }
+
+  // Count how many cells we can move straight in a direction before hitting a wall/block
+  // Higher clearance = better escape route (less likely to get trapped)
+  private countStraightLineClearance(
+    grid: DangerCell[][],
+    startX: number,
+    startY: number,
+    direction: Direction
+  ): number {
+    const dirMap = {
+      [Direction.UP]: { dx: 0, dy: -1 },
+      [Direction.DOWN]: { dx: 0, dy: 1 },
+      [Direction.LEFT]: { dx: -1, dy: 0 },
+      [Direction.RIGHT]: { dx: 1, dy: 0 }
+    };
+
+    const { dx, dy } = dirMap[direction];
+    let x = startX;
+    let y = startY;
+    let count = 0;
+
+    // Count walkable cells in this direction (up to 8 tiles)
+    for (let i = 0; i < 8; i++) {
+      if (x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT) break;
+
+      const cell = grid[y]?.[x];
+      if (!cell || !cell.isWalkable) break;
+
+      count++;
+      x += dx;
+      y += dy;
+    }
+
+    return count;
+  }
+
+  // Check if continuing straight in a direction eventually reaches safety
+  // This is critical because escape commitment forces us to keep going straight
+  private checkStraightLineEscape(
+    grid: DangerCell[][],
+    startX: number,
+    startY: number,
+    dangerZone: Set<string>,
+    direction: Direction,
+    maxDistance: number
+  ): boolean {
+    const dirMap = {
+      [Direction.UP]: { dx: 0, dy: -1 },
+      [Direction.DOWN]: { dx: 0, dy: 1 },
+      [Direction.LEFT]: { dx: -1, dy: 0 },
+      [Direction.RIGHT]: { dx: 1, dy: 0 }
+    };
+
+    const { dx, dy } = dirMap[direction];
+    let x = startX;
+    let y = startY;
+
+    // Walk straight in this direction
+    for (let dist = 0; dist < maxDistance; dist++) {
+      const cell = grid[y]?.[x];
+      if (!cell || !cell.isWalkable) {
+        return false; // Hit a wall or invalid cell before reaching safety
+      }
+
+      // Check if this cell is safe from BOTH the new bomb and existing dangers
+      const isSafeFromNewBomb = !dangerZone.has(`${x},${y}`);
+      const isSafeFromExisting = cell.dangerTime === Infinity;
+
+      if (isSafeFromNewBomb && isSafeFromExisting) {
+        return true; // Found safety!
+      }
+
+      // Continue in the same direction
+      x += dx;
+      y += dy;
+
+      // Check bounds for next iteration
+      if (x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT) {
+        return false;
+      }
+    }
+
+    return false; // Didn't find safety within maxDistance
+  }
+
+  // Check if we can reach a safe cell within N moves in a specific direction
+  // This ensures we can escape the danger zone quickly, not just eventually
+  private canReachSafetyInNMoves(
+    grid: DangerCell[][],
+    startX: number,
+    startY: number,
+    dangerZone: Set<string>,
+    direction: Direction,
+    maxMoves: number
+  ): boolean {
+    const dirMap = {
+      [Direction.UP]: { dx: 0, dy: -1 },
+      [Direction.DOWN]: { dx: 0, dy: 1 },
+      [Direction.LEFT]: { dx: -1, dy: 0 },
+      [Direction.RIGHT]: { dx: 1, dy: 0 }
+    };
+
+    const { dx, dy } = dirMap[direction];
+    let x = startX;
+    let y = startY;
+
+    // Walk in the specified direction for up to N moves
+    for (let i = 0; i < maxMoves; i++) {
+      // Check current position
+      const cell = grid[y]?.[x];
+      if (!cell) return false;
+
+      // Check if we've reached safety
+      const isSafeFromNewBomb = !dangerZone.has(`${x},${y}`);
+      const isSafeFromExisting = cell.dangerTime === Infinity;
+
+      if (isSafeFromNewBomb && isSafeFromExisting) {
+        return true; // Found safety within N moves!
+      }
+
+      // Try to continue in this direction
+      const nx = x + dx;
+      const ny = y + dy;
+
+      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) return false;
+
+      const nextCell = grid[ny]?.[nx];
+      if (!nextCell || !nextCell.isWalkable) return false;
+
+      x = nx;
+      y = ny;
+    }
+
+    // Check final position after N moves
+    const finalCell = grid[y]?.[x];
+    if (!finalCell) return false;
+
+    const isSafeFromNewBomb = !dangerZone.has(`${x},${y}`);
+    const isSafeFromExisting = finalCell.dangerTime === Infinity;
+
+    return isSafeFromNewBomb && isSafeFromExisting;
+  }
+
   // Count how many safe cells are reachable via BFS from a starting position
   // FIXED: Now accounts for time - only considers cells reachable before bomb explodes
+  // FIXED: Now considers bombs as passable if AI has kick/teleport and enough time
   private countReachableSafeCellsFromDirection(
     grid: DangerCell[][],
     startX: number,
@@ -523,6 +900,8 @@ export class AIController {
     const playerSpeed = this.player.getEffectiveSpeed(); // tiles per second
     const maxReachableDistance = Math.floor(playerSpeed * safetyTime);
 
+    const canPassThroughBombs = this.player.canTeleport() || this.player.hasAbility('kick');
+
     const queue: {x: number; y: number; dist: number}[] = [{x: startX, y: startY, dist: 0}];
     const visited = new Set<string>();
     visited.add(`${startX},${startY}`);
@@ -540,14 +919,31 @@ export class AIController {
         if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
 
         const cell = grid[ny]?.[nx];
-        if (!cell || !cell.isWalkable) continue;
+        if (!cell) continue;
         if (visited.has(`${nx},${ny}`)) continue;
 
-        // CRITICAL: Don't path through the bomb location itself!
+        // CRITICAL: Don't path through the bomb location itself (the one we're placing)
         if (nx === bombX && ny === bombY) continue;
 
         // FIXED: Only consider cells we can actually reach in time
         if (newDist > maxReachableDistance) continue;
+
+        // Check if cell is passable
+        if (!cell.isWalkable) {
+          // Cell has a bomb - can we pass through it?
+          if (cell.hasBomb && canPassThroughBombs) {
+            // Calculate time to reach this cell
+            const timeToReach = newDist / playerSpeed;
+            // Only pass through if we can reach before the bomb explodes
+            // Add safety margin of 0.5 seconds
+            if (cell.dangerTime > timeToReach + 0.5) {
+              // Can pass through this bomb in time
+              visited.add(`${nx},${ny}`);
+              queue.push({x: nx, y: ny, dist: newDist});
+            }
+          }
+          continue; // Skip non-passable cells
+        }
 
         visited.add(`${nx},${ny}`);
 
@@ -804,7 +1200,70 @@ export class AIController {
     }
 
     const cell = grid[ny]?.[nx];
-    return cell !== undefined && cell.isWalkable && cell.dangerTime === Infinity;
+    if (!cell) return false;
+
+    // If AI has teleport ability, it can move through bombs
+    if (cell.hasBomb && this.player.canTeleport()) {
+      return cell.dangerTime === Infinity;
+    }
+
+    // If AI has kick ability, it can move through bombs (will kick them)
+    if (cell.hasBomb && this.player.hasAbility('kick')) {
+      // Check if the cell beyond the bomb is free (for the bomb to be kicked into)
+      const beyondX = nx + (nx - myX);
+      const beyondY = ny + (ny - myY);
+      const beyondCell = grid[beyondY]?.[beyondX];
+      // Can kick if beyond cell is walkable and doesn't have another bomb
+      if (beyondCell && beyondCell.isWalkable && !beyondCell.hasBomb) {
+        return cell.dangerTime === Infinity;
+      }
+    }
+
+    return cell.isWalkable && cell.dangerTime === Infinity;
+  }
+
+  // Check if a cell should be avoided due to ice danger (when AI has shield)
+  private shouldAvoidIceDanger(cell: DangerCell): boolean {
+    // If AI has shield, prioritize avoiding ice bomb zones
+    // Getting hit by ice while shielded will freeze the player
+    return this.player.hasShield() && cell.hasIceDanger && cell.dangerTime < Infinity;
+  }
+
+  // Check if we can physically move in a direction (not blocked by wall/bomb)
+  // Unlike canMoveSafely, this doesn't check if the cell is safe from danger
+  // Used during escape commitment when we need to keep moving regardless of danger
+  private canPhysicallyMove(dir: Direction, myX: number, myY: number, grid: DangerCell[][]): boolean {
+    let nx = myX;
+    let ny = myY;
+
+    switch (dir) {
+      case Direction.UP: ny--; break;
+      case Direction.DOWN: ny++; break;
+      case Direction.LEFT: nx--; break;
+      case Direction.RIGHT: nx++; break;
+    }
+
+    const cell = grid[ny]?.[nx];
+    if (!cell) return false;
+
+    // If cell has a bomb, check if we can pass through it
+    if (cell.hasBomb) {
+      // Can teleport through bombs
+      if (this.player.canTeleport()) return true;
+
+      // Can kick bombs if there's space beyond
+      if (this.player.hasAbility('kick')) {
+        const beyondX = nx + (nx - myX);
+        const beyondY = ny + (ny - myY);
+        const beyondCell = grid[beyondY]?.[beyondX];
+        if (beyondCell && beyondCell.isWalkable && !beyondCell.hasBomb) {
+          return true;
+        }
+      }
+      return false; // Bomb blocks movement
+    }
+
+    return cell.isWalkable;
   }
 
   // Find nearest destructible block
@@ -874,7 +1333,8 @@ export class AIController {
           dangerTime: Infinity,
           hasBomb: false,
           hasPowerUp: false,
-          hasDestructibleBlock: false
+          hasDestructibleBlock: false,
+          hasIceDanger: false
         };
       }
     }
@@ -903,8 +1363,8 @@ export class AIController {
         grid[by][bx].dangerTime = Math.min(grid[by][bx].dangerTime, explodeTime);
       }
 
-      // Mark blast zones
-      this.markBlastZone(grid, bx, by, bomb.range, explodeTime);
+      // Mark blast zones - pass bomb type for piercing/fire bomb awareness
+      this.markBlastZone(grid, bx, by, bomb.range, explodeTime, bomb.type);
     }
 
     // Handle chain reactions
@@ -921,7 +1381,7 @@ export class AIController {
         if (!bombCell) continue;
 
         if (bombCell.dangerTime < bomb.timer) {
-          const wasChanged = this.markBlastZone(grid, bomb.position.gridX, bomb.position.gridY, bomb.range, bombCell.dangerTime);
+          const wasChanged = this.markBlastZone(grid, bomb.position.gridX, bomb.position.gridY, bomb.range, bombCell.dangerTime, bomb.type);
           if (wasChanged) changed = true;
         }
       }
@@ -956,7 +1416,7 @@ export class AIController {
     return grid;
   }
 
-  private markBlastZone(grid: DangerCell[][], bx: number, by: number, range: number, dangerTime: number): boolean {
+  private markBlastZone(grid: DangerCell[][], bx: number, by: number, range: number, dangerTime: number, bombType: BombType = BombType.NORMAL): boolean {
     let changed = false;
     const directions = [
       {dx: 0, dy: -1},
@@ -965,7 +1425,15 @@ export class AIController {
       {dx: 1, dy: 0}
     ];
 
+    // Fire bombs have extended danger duration due to lingering flames
+    const effectiveDangerTime = bombType === BombType.FIRE
+      ? dangerTime + FIRE_LINGER_DURATION
+      : dangerTime;
+
+    const isIceBomb = bombType === BombType.ICE;
+
     for (const {dx, dy} of directions) {
+      let blocksPierced = 0;
       for (let i = 1; i <= range; i++) {
         const tx = bx + dx * i;
         const ty = by + dy * i;
@@ -975,17 +1443,28 @@ export class AIController {
         const cell = grid[ty][tx];
 
         if (!cell.isWalkable && !cell.hasBomb) {
-          if (cell.hasDestructibleBlock && cell.dangerTime > dangerTime) {
-            cell.dangerTime = dangerTime;
-            changed = true;
+          if (cell.hasDestructibleBlock) {
+            if (cell.dangerTime > effectiveDangerTime) {
+              cell.dangerTime = effectiveDangerTime;
+              changed = true;
+            }
+            if (isIceBomb) cell.hasIceDanger = true;
+            // Piercing bombs can pierce through up to 2 destructible blocks per direction
+            if (bombType === BombType.PIERCING) {
+              blocksPierced++;
+              if (blocksPierced >= 2) break;
+              continue; // Continue checking next tile
+            }
           }
-          break;
+          break; // Non-piercing bombs or indestructible blocks stop here
         }
 
-        if (cell.dangerTime > dangerTime) {
-          cell.dangerTime = dangerTime;
+        if (cell.dangerTime > effectiveDangerTime) {
+          cell.dangerTime = effectiveDangerTime;
           changed = true;
         }
+        // Mark ice bomb danger zones - important for AI with shield
+        if (isIceBomb) cell.hasIceDanger = true;
       }
     }
 
