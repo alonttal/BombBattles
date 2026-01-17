@@ -529,7 +529,7 @@ export class Game {
       // In single player mode, all players except the first one are AI
       if (this.isSinglePlayer && i > 0) {
         this.aiPlayers.add(i);
-        const aiController = new SimpleAI(player);
+        const aiController = new SimpleAI(player, this.aiDifficulty);
         this.aiControllers.set(i, aiController);
       }
     }

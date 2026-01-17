@@ -37,10 +37,48 @@ interface AIStrategy {
   path?: Array<{x: number; y: number}>; // Full BFS path for escapes
 }
 
+interface SimpleAIDifficultySettings {
+  decisionInterval: number;        // Base decision interval (seconds)
+  dangerReactionMultiplier: number; // Multiplier for danger response time
+  minBombCooldown: number;         // Min seconds between bombs
+  bombPlacementChance: number;     // 0-1, chance to place bomb when opportunity arises
+  aggressionChance: number;        // 0-1, base chance to target players over blocks
+  targetCommitDuration: number;    // ms, how long to commit to a target
+}
+
+const SIMPLE_AI_PRESETS: Record<'easy' | 'medium' | 'hard', SimpleAIDifficultySettings> = {
+  easy: {
+    decisionInterval: 0.4,
+    dangerReactionMultiplier: 1.5,
+    minBombCooldown: 2.0,
+    bombPlacementChance: 0.7,
+    aggressionChance: 0.4,
+    targetCommitDuration: 4000,
+  },
+  medium: {
+    decisionInterval: 0.3,
+    dangerReactionMultiplier: 1.0,
+    minBombCooldown: 1.2,
+    bombPlacementChance: 0.9,
+    aggressionChance: 0.6,
+    targetCommitDuration: 3000,
+  },
+  hard: {
+    decisionInterval: 0.15,
+    dangerReactionMultiplier: 0.7,
+    minBombCooldown: 0.6,
+    bombPlacementChance: 1.0,
+    aggressionChance: 0.8,
+    targetCommitDuration: 2000,
+  },
+};
+
 export class SimpleAI {
   private player: Player;
+  private difficulty: 'easy' | 'medium' | 'hard';
+  private settings: SimpleAIDifficultySettings;
   private lastDecisionTime: number = 0;
-  private decisionInterval: number = 0.3; // 300ms
+  private lastBombTime: number = -10;  // Track bomb placement
   private currentStrategy: AIStrategy | null = null;
   private grid: GridCell[][] = [];
 
@@ -79,8 +117,10 @@ export class SimpleAI {
   // Track last decision for debugging
   private lastDecision: { direction: Direction | null; placeBomb: boolean } | null = null;
 
-  constructor(player: Player) {
+  constructor(player: Player, difficulty: 'easy' | 'medium' | 'hard' = 'medium') {
     this.player = player;
+    this.difficulty = difficulty;
+    this.settings = SIMPLE_AI_PRESETS[difficulty];
   }
 
   update(
@@ -109,15 +149,15 @@ export class SimpleAI {
     // Otherwise, adjust decision interval based on danger urgency nearby
     else {
       // Calculate effective interval based on nearby danger
-      let effectiveInterval = this.decisionInterval;
+      let effectiveInterval = this.settings.decisionInterval;
       const dangerTime = currentCell.dangerTime;
 
       if (dangerTime < 1.0) {
-        effectiveInterval = 0.1;  // 100ms - imminent danger
+        effectiveInterval = 0.1 * this.settings.dangerReactionMultiplier;  // imminent danger
       } else if (dangerTime < 2.0) {
-        effectiveInterval = 0.2;  // 200ms - moderate danger
+        effectiveInterval = 0.2 * this.settings.dangerReactionMultiplier;  // moderate danger
       }
-      // else use default 300ms
+      // else use base decision interval
 
       if (currentTime - this.lastDecisionTime >= effectiveInterval) {
         this.lastDecisionTime = currentTime;
@@ -127,7 +167,7 @@ export class SimpleAI {
 
     // Execute current strategy
     if (this.currentStrategy) {
-      const result = this.executeStrategy(blocks);
+      const result = this.executeStrategy(blocks, currentTime);
 
       // Safety check: if we're about to move into danger while NOT escaping, reconsider
       if (result.direction !== null && this.currentStrategy.type !== 'escape') {
@@ -498,7 +538,7 @@ export class SimpleAI {
     // Check if we have a valid target commitment
     if (this.targetCommitment) {
       const timeSinceCommit = currentTime - this.targetCommitment.commitTime;
-      const commitDuration = 3000; // Commit to target for 3 seconds
+      const commitDuration = this.settings.targetCommitDuration;
 
       if (timeSinceCommit < commitDuration) {
         // Verify target still exists
@@ -540,8 +580,8 @@ export class SimpleAI {
     if (this.aggressionDecision && currentTime - this.aggressionDecision.decisionTime < aggressionCacheDuration) {
       prioritizePlayers = this.aggressionDecision.prioritizePlayers;
     } else {
-      // More aggressive when fewer blocks remain (60% base + up to 40% based on blocks cleared)
-      const aggressionChance = 0.6 + (0.4 * (1 - Math.min(blockCount, 40) / 40));
+      // More aggressive when fewer blocks remain (base + up to 40% based on blocks cleared)
+      const aggressionChance = this.settings.aggressionChance + (0.4 * (1 - Math.min(blockCount, 40) / 40));
       prioritizePlayers = Math.random() < aggressionChance;
       this.aggressionDecision = { prioritizePlayers, decisionTime: currentTime };
     }
@@ -635,7 +675,7 @@ export class SimpleAI {
     return null;
   }
 
-  private executeStrategy(_blocks: Block[]): {direction: Direction | null; placeBomb: boolean} {
+  private executeStrategy(_blocks: Block[], currentTime: number): {direction: Direction | null; placeBomb: boolean} {
     if (!this.currentStrategy) {
       return {direction: null, placeBomb: false};
     }
@@ -661,6 +701,17 @@ export class SimpleAI {
 
     // If seeking a target and at target, place bomb if allowed
     if (atTarget && placeBombAtTarget && this.player.canPlaceBomb()) {
+      // Check bomb cooldown and placement chance based on difficulty
+      const timeSinceLastBomb = currentTime - this.lastBombTime;
+      if (timeSinceLastBomb < this.settings.minBombCooldown) {
+        // Still on cooldown - just wait at target
+        return {direction: null, placeBomb: false};
+      }
+      if (Math.random() > this.settings.bombPlacementChance) {
+        // Randomly skip bomb placement based on difficulty
+        return {direction: null, placeBomb: false};
+      }
+
       // Check if there's a safe escape BEFORE placing the bomb
       const escapeAfterBomb = this.findBFSEscapeAfterBomb(myX, myY);
       if (!escapeAfterBomb) {
@@ -685,7 +736,8 @@ export class SimpleAI {
         };
       }
 
-      // Force immediate re-evaluation to continue escaping
+      // Update last bomb time and force immediate re-evaluation to continue escaping
+      this.lastBombTime = currentTime;
       this.lastDecisionTime = 0;
       return {direction: moveDir, placeBomb: true};
     }
@@ -991,7 +1043,7 @@ export class SimpleAI {
   }
 
   getDifficulty(): string {
-    return 'easy';
+    return this.difficulty;
   }
 
   // Debug method for halt detection
