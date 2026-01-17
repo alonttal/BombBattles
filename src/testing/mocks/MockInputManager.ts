@@ -30,15 +30,15 @@ export class MockInputManager {
     return this.simulatedInputs.get(playerId)?.special || false;
   }
 
-  isKeyPressed(key: string): boolean {
+  isKeyPressed(_key: string): boolean {
     return false;
   }
 
-  isKeyJustPressed(key: string): boolean {
+  isKeyJustPressed(_key: string): boolean {
     return false;
   }
 
-  isKeyJustReleased(key: string): boolean {
+  isKeyJustReleased(_key: string): boolean {
     return false;
   }
 

@@ -54,6 +54,31 @@ export class SimpleAI {
     startPixelY: number;
   } | null = null;
 
+  // Cached path for movement optimization
+  private cachedPath: {
+    targetX: number;
+    targetY: number;
+    path: Array<{x: number; y: number}>;
+    ignoreDanger: boolean;
+  } | null = null;
+
+  // Target commitment to prevent oscillation between targets
+  private targetCommitment: {
+    targetX: number;
+    targetY: number;
+    targetType: 'block' | 'powerup' | 'player';
+    commitTime: number;
+  } | null = null;
+
+  // Cached aggression decision to prevent random switching
+  private aggressionDecision: {
+    prioritizePlayers: boolean;
+    decisionTime: number;
+  } | null = null;
+
+  // Track last decision for debugging
+  private lastDecision: { direction: Direction | null; placeBomb: boolean } | null = null;
+
   constructor(player: Player) {
     this.player = player;
   }
@@ -114,14 +139,17 @@ export class SimpleAI {
         if (this.isValidCell(nextX, nextY) && this.grid[nextY][nextX].isDangerous) {
           // Don't walk into danger - stop and reconsider
           this.currentStrategy = null;
-          return {direction: null, placeBomb: false};
+          this.lastDecision = {direction: null, placeBomb: false};
+          return this.lastDecision;
         }
       }
 
+      this.lastDecision = result;
       return result;
     }
 
-    return {direction: null, placeBomb: false};
+    this.lastDecision = {direction: null, placeBomb: false};
+    return this.lastDecision;
   }
 
   private buildGridStatus(
@@ -261,7 +289,6 @@ export class SimpleAI {
 
     // STRATEGY 1: If in danger, escape to closest safe tile
     if (this.grid[myY][myX].isDangerous) {
-      const dangerTime = this.grid[myY][myX].dangerTime;
 
       // If we have an active escape commitment, verify target is still safe
       if (this.escapeCommitment && !this.isStuck()) {
@@ -363,8 +390,7 @@ export class SimpleAI {
 
   private findClosestSafeTile(startX: number, startY: number): {x: number; y: number} | null {
     // BFS to find closest safe tile WITH SAFETY MARGIN
-    // Track the first step direction to ensure path is valid
-    const queue: Array<{x: number; y: number; dist: number; firstStepX: number; firstStepY: number}> = [];
+    const queue: Array<{x: number; y: number; dist: number}> = [];
     const visited = new Set<string>();
     visited.add(`${startX},${startY}`);
 
@@ -385,16 +411,16 @@ export class SimpleAI {
         const minTimeNeeded = timePerTile + safetyMargin;
         if (!this.grid[ny][nx].isDangerous || dangerTime > minTimeNeeded) {
           visited.add(key);
-          queue.push({x: nx, y: ny, dist: 1, firstStepX: nx, firstStepY: ny});
+          queue.push({x: nx, y: ny, dist: 1});
         }
       }
     }
 
-    const safeTiles: Array<{x: number; y: number; firstStepX: number; firstStepY: number}> = [];
-    let minDist = Infinity;
+    const safeTiles: Array<{x: number; y: number; dist: number; adjustedDist: number}> = [];
+    let minAdjustedDist = Infinity;
 
     while (queue.length > 0) {
-      const {x, y, dist, firstStepX, firstStepY} = queue.shift()!;
+      const {x, y, dist} = queue.shift()!;
 
       // Is this tile safe?
       if (!this.grid[y][x].isDangerous && this.grid[y][x].isWalkable) {
@@ -407,18 +433,18 @@ export class SimpleAI {
 
         const adjustedDist = hasMargin ? dist + alignmentBonus : dist + 100;  // Prefer tiles with margin
 
-        if (adjustedDist < minDist) {
-          minDist = adjustedDist;
+        if (adjustedDist < minAdjustedDist) {
+          minAdjustedDist = adjustedDist;
           safeTiles.length = 0;
-          safeTiles.push({x, y, firstStepX, firstStepY});
-        } else if (adjustedDist === minDist) {
-          safeTiles.push({x, y, firstStepX, firstStepY});
+          safeTiles.push({x, y, dist, adjustedDist});
+        } else if (adjustedDist === minAdjustedDist) {
+          safeTiles.push({x, y, dist, adjustedDist});
         }
         continue; // Don't explore beyond safe tiles
       }
 
       // If we've already found safe tiles and current dist is greater, stop
-      if (dist > minDist) continue;
+      if (dist > minAdjustedDist) continue;
 
       // Explore neighbors - but avoid paths through active explosions
       for (const [dx, dy] of directions) {
@@ -434,13 +460,13 @@ export class SimpleAI {
           const minTimeNeeded = timeToReach + timePerTile + safetyMargin;
           if (!this.grid[ny][nx].isDangerous || dangerTime > minTimeNeeded) {
             visited.add(key);
-            queue.push({x: nx, y: ny, dist: dist + 1, firstStepX, firstStepY});
+            queue.push({x: nx, y: ny, dist: dist + 1});
           }
         }
       }
     }
 
-    // Choose randomly among safe tiles, preferring those with valid first steps
+    // Choose randomly among safe tiles
     if (safeTiles.length > 0) {
       const chosen = safeTiles[Math.floor(Math.random() * safeTiles.length)];
       return {x: chosen.x, y: chosen.y};
@@ -467,6 +493,38 @@ export class SimpleAI {
   }
 
   private findTargetWithBFS(startX: number, startY: number): {x: number; y: number; type: 'block' | 'powerup' | 'player'} | null {
+    const currentTime = Date.now();
+
+    // Check if we have a valid target commitment
+    if (this.targetCommitment) {
+      const timeSinceCommit = currentTime - this.targetCommitment.commitTime;
+      const commitDuration = 3000; // Commit to target for 3 seconds
+
+      if (timeSinceCommit < commitDuration) {
+        // Verify target still exists
+        const targetCell = this.grid[this.targetCommitment.targetY]?.[this.targetCommitment.targetX];
+        if (targetCell) {
+          const stillValid =
+            (this.targetCommitment.targetType === 'block' && targetCell.hasBreakableBlock) ||
+            (this.targetCommitment.targetType === 'powerup' && targetCell.hasPowerUp && !targetCell.hasBadPowerUp) ||
+            (this.targetCommitment.targetType === 'player' && targetCell.hasPlayer);
+
+          // Also check we haven't reached it yet
+          const atTarget = startX === this.targetCommitment.targetX && startY === this.targetCommitment.targetY;
+
+          if (stillValid && !atTarget && !targetCell.isDangerous) {
+            return {
+              x: this.targetCommitment.targetX,
+              y: this.targetCommitment.targetY,
+              type: this.targetCommitment.targetType
+            };
+          }
+        }
+      }
+      // Target invalid or reached, clear commitment
+      this.targetCommitment = null;
+    }
+
     // Count remaining breakable blocks to determine aggression level
     let blockCount = 0;
     for (let y = 0; y < GRID_HEIGHT; y++) {
@@ -475,9 +533,18 @@ export class SimpleAI {
       }
     }
 
-    // More aggressive when fewer blocks remain (60% base + up to 40% based on blocks cleared)
-    const aggressionChance = 0.6 + (0.4 * (1 - Math.min(blockCount, 40) / 40));
-    const prioritizePlayers = Math.random() < aggressionChance;
+    // Cache aggression decision for 2 seconds to prevent oscillation
+    const aggressionCacheDuration = 2000;
+    let prioritizePlayers: boolean;
+
+    if (this.aggressionDecision && currentTime - this.aggressionDecision.decisionTime < aggressionCacheDuration) {
+      prioritizePlayers = this.aggressionDecision.prioritizePlayers;
+    } else {
+      // More aggressive when fewer blocks remain (60% base + up to 40% based on blocks cleared)
+      const aggressionChance = 0.6 + (0.4 * (1 - Math.min(blockCount, 40) / 40));
+      prioritizePlayers = Math.random() < aggressionChance;
+      this.aggressionDecision = { prioritizePlayers, decisionTime: currentTime };
+    }
 
     // BFS to find NEAREST targets (ordered by distance)
     const queue: Array<{x: number; y: number; dist: number}> = [{x: startX, y: startY, dist: 0}];
@@ -512,7 +579,7 @@ export class SimpleAI {
 
         // Found a good power-up - record position
         if (cell.hasPowerUp && !cell.hasBadPowerUp && cell.isWalkable && !cell.isDangerous && !nearestPowerUp) {
-          nearestPowerUp = {x: nx, y: ny, dist};
+          nearestPowerUp = {x: nx, y: ny, dist: dist + 1};
         }
 
         // Found another player - record position
@@ -534,89 +601,41 @@ export class SimpleAI {
       }
     }
 
+    // Helper to commit and return target
+    const commitTarget = (x: number, y: number, type: 'block' | 'powerup' | 'player') => {
+      this.targetCommitment = { targetX: x, targetY: y, targetType: type, commitTime: currentTime };
+      return { x, y, type };
+    };
+
     // Choose target based on aggression and distance
     // Prefer closer targets, but aggression influences player vs block priority
     if (prioritizePlayers && nearestPlayer) {
       // Aggressive: attack player if they're reasonably close (within 10 tiles)
       if (nearestPlayer.dist <= 10 || !nearestBlock) {
-        const bombRange = this.player.bombRange;
-        // More likely to place bomb close when aggressive
-        const distance = Math.floor(Math.random() * Math.min(2, bombRange + 1));
-        const targetPos = this.calculateBombPositionFromPlayer(
-          nearestPlayer.x, nearestPlayer.y,
-          nearestPlayer.playerX, nearestPlayer.playerY,
-          distance
-        );
-        return {x: targetPos.x, y: targetPos.y, type: 'player'};
+        // Use consistent position (where we found the path to player) instead of random
+        return commitTarget(nearestPlayer.x, nearestPlayer.y, 'player');
       }
     }
 
     // Power-ups are always good to collect if close
     if (nearestPowerUp && (!nearestBlock || nearestPowerUp.dist <= nearestBlock.dist)) {
-      return {x: nearestPowerUp.x, y: nearestPowerUp.y, type: 'powerup'};
+      return commitTarget(nearestPowerUp.x, nearestPowerUp.y, 'powerup');
     }
 
     // Destroy blocks to open paths
     if (nearestBlock) {
-      return {x: nearestBlock.x, y: nearestBlock.y, type: 'block'};
+      return commitTarget(nearestBlock.x, nearestBlock.y, 'block');
     }
 
     // Last resort: attack any reachable player
     if (nearestPlayer) {
-      const bombRange = this.player.bombRange;
-      const distance = Math.floor(Math.random() * (bombRange + 1));
-      const targetPos = this.calculateBombPositionFromPlayer(
-        nearestPlayer.x, nearestPlayer.y,
-        nearestPlayer.playerX, nearestPlayer.playerY,
-        distance
-      );
-      return {x: targetPos.x, y: targetPos.y, type: 'player'};
+      return commitTarget(nearestPlayer.x, nearestPlayer.y, 'player');
     }
 
     return null;
   }
 
-  private calculateBombPositionFromPlayer(
-    currentX: number,
-    currentY: number,
-    playerX: number,
-    playerY: number,
-    distance: number
-  ): {x: number; y: number} {
-    // If distance is 0, return current position (bomb right next to player)
-    if (distance === 0) {
-      return {x: currentX, y: currentY};
-    }
-
-    // Calculate direction away from player
-    const dx = currentX - playerX;
-    const dy = currentY - playerY;
-
-    // Normalize direction
-    const dirX = dx !== 0 ? Math.sign(dx) : 0;
-    const dirY = dy !== 0 ? Math.sign(dy) : 0;
-
-    // Calculate position distance tiles away from player
-    let targetX = playerX;
-    let targetY = playerY;
-
-    for (let i = 0; i < distance; i++) {
-      const nextX = targetX + dirX;
-      const nextY = targetY + dirY;
-
-      // Stop if hit wall or out of bounds
-      if (!this.isValidCell(nextX, nextY) || !this.grid[nextY][nextX].isWalkable) {
-        break;
-      }
-
-      targetX = nextX;
-      targetY = nextY;
-    }
-
-    return {x: targetX, y: targetY};
-  }
-
-  private executeStrategy(blocks: Block[]): {direction: Direction | null; placeBomb: boolean} {
+  private executeStrategy(_blocks: Block[]): {direction: Direction | null; placeBomb: boolean} {
     if (!this.currentStrategy) {
       return {direction: null, placeBomb: false};
     }
@@ -805,27 +824,6 @@ export class SimpleAI {
     return null;
   }
 
-  private getAnyWalkableDirection(x: number, y: number): Direction | null {
-    // Get any walkable direction (ignoring danger - we're placing a bomb!)
-    const directions = [
-      {dir: Direction.UP, dx: 0, dy: -1},
-      {dir: Direction.DOWN, dx: 0, dy: 1},
-      {dir: Direction.LEFT, dx: -1, dy: 0},
-      {dir: Direction.RIGHT, dx: 1, dy: 0},
-    ];
-
-    for (const {dir, dx, dy} of directions) {
-      const nx = x + dx;
-      const ny = y + dy;
-
-      if (this.isValidCell(nx, ny) && this.grid[ny][nx].isWalkable) {
-        return dir;
-      }
-    }
-
-    return null;
-  }
-
   private getEmergencyEscapeDirection(x: number, y: number): Direction | null {
     // Emergency escape: prefer tiles with more time before danger, avoid active explosions
     const directions = [
@@ -862,105 +860,122 @@ export class SimpleAI {
     return bestDangerTime > 0 ? bestDir : null;
   }
 
-  private getAnyValidDirection(x: number, y: number): Direction | null {
-    // Get any walkable, non-dangerous direction
-    const directions = [
-      {dir: Direction.UP, dx: 0, dy: -1},
-      {dir: Direction.DOWN, dx: 0, dy: 1},
-      {dir: Direction.LEFT, dx: -1, dy: 0},
-      {dir: Direction.RIGHT, dx: 1, dy: 0},
-    ];
-
-    for (const {dir, dx, dy} of directions) {
-      const nx = x + dx;
-      const ny = y + dy;
-
-      if (this.isValidCell(nx, ny) && this.grid[ny][nx].isWalkable && !this.grid[ny][nx].isDangerous) {
-        return dir;
-      }
-    }
-
-    return null;
-  }
-
-  private hasValidEscape(x: number, y: number): boolean {
-    // Quick check if any escape direction exists
-    return this.findEscapeDirection(x, y) !== null;
-  }
-
-  private findEscapeDirection(x: number, y: number): Direction | null {
-    // Find adjacent cells that will be safe AFTER placing bomb at (x,y)
-    const bombRange = this.player.bombRange;
-
-    const directions = [
-      {dir: Direction.UP, dx: 0, dy: -1},
-      {dir: Direction.DOWN, dx: 0, dy: 1},
-      {dir: Direction.LEFT, dx: -1, dy: 0},
-      {dir: Direction.RIGHT, dx: 1, dy: 0},
-    ];
-
-    for (const {dir, dx, dy} of directions) {
-      const nx = x + dx;
-      const ny = y + dy;
-
-      if (!this.isValidCell(nx, ny) || !this.grid[ny][nx].isWalkable) continue;
-
-      // Check if this position will be in the blast zone of the bomb we're about to place
-      const inHorizontalBlast = (ny === y) && (Math.abs(nx - x) <= bombRange);
-      const inVerticalBlast = (nx === x) && (Math.abs(ny - y) <= bombRange);
-
-      if (inHorizontalBlast || inVerticalBlast) {
-        // This position will be dangerous after placing bomb
-        continue;
-      }
-
-      // Check if position is currently dangerous from OTHER bombs
-      if (this.grid[ny][nx].isDangerous) {
-        continue;
-      }
-
-      // Safe escape!
-      return dir;
-    }
-
-    return null;
-  }
-
   private getDirectionToward(fromX: number, fromY: number, toX: number, toY: number, ignoreDanger: boolean = false): Direction | null {
-    // Simple greedy movement toward target
-    const dx = toX - fromX;
-    const dy = toY - fromY;
-
     const canMove = (nx: number, ny: number) => {
       if (!this.isValidCell(nx, ny) || !this.grid[ny][nx].isWalkable) return false;
       return ignoreDanger || !this.grid[ny][nx].isDangerous;
     };
 
-    // Determine primary and secondary directions
-    const horizontalFirst = Math.abs(dx) > Math.abs(dy);
-
-    // Try horizontal movement
-    const tryHorizontal = (): Direction | null => {
-      if (dx === 0) return null;
-      const dir = dx > 0 ? Direction.RIGHT : Direction.LEFT;
-      const nx = fromX + (dx > 0 ? 1 : -1);
-      return canMove(nx, fromY) ? dir : null;
-    };
-
-    // Try vertical movement
-    const tryVertical = (): Direction | null => {
-      if (dy === 0) return null;
-      const dir = dy > 0 ? Direction.DOWN : Direction.UP;
-      const ny = fromY + (dy > 0 ? 1 : -1);
-      return canMove(fromX, ny) ? dir : null;
-    };
-
-    // Try primary direction first, then alternate
-    if (horizontalFirst) {
-      return tryHorizontal() ?? tryVertical();
-    } else {
-      return tryVertical() ?? tryHorizontal();
+    // Already at target
+    if (fromX === toX && fromY === toY) {
+      this.cachedPath = null;
+      return null;
     }
+
+    // Check if we have a valid cached path
+    if (this.cachedPath &&
+        this.cachedPath.targetX === toX &&
+        this.cachedPath.targetY === toY &&
+        this.cachedPath.path.length > 0) {
+
+      const nextStep = this.cachedPath.path[0];
+
+      // ALWAYS check for danger before using cached path!
+      // Only use cache if: walkable AND (ignoreDanger OR not dangerous)
+      const isWalkable = this.isValidCell(nextStep.x, nextStep.y) && this.grid[nextStep.y][nextStep.x].isWalkable;
+      const isSafe = ignoreDanger || !this.grid[nextStep.y][nextStep.x].isDangerous;
+
+      if (isWalkable && isSafe) {
+        // Check if next step is adjacent to current position
+        const dx = nextStep.x - fromX;
+        const dy = nextStep.y - fromY;
+
+        if (Math.abs(dx) + Math.abs(dy) === 1) {
+          // Remove this step from path
+          this.cachedPath.path.shift();
+
+          // Return direction to next step
+          if (dx === 1) return Direction.RIGHT;
+          if (dx === -1) return Direction.LEFT;
+          if (dy === 1) return Direction.DOWN;
+          if (dy === -1) return Direction.UP;
+        }
+      }
+
+      // Path is invalid, recalculate
+      this.cachedPath = null;
+    }
+
+    // BFS to find shortest path(s) to target
+    const directions: [number, number, Direction][] = [
+      [0, -1, Direction.UP],
+      [0, 1, Direction.DOWN],
+      [-1, 0, Direction.LEFT],
+      [1, 0, Direction.RIGHT]
+    ];
+
+    // Track parent for path reconstruction
+    const visited = new Map<string, {parentX: number, parentY: number, dist: number}>();
+    const queue: {x: number, y: number, dist: number}[] = [{x: fromX, y: fromY, dist: 0}];
+    visited.set(`${fromX},${fromY}`, {parentX: -1, parentY: -1, dist: 0});
+
+    let targetReached = false;
+
+    while (queue.length > 0 && !targetReached) {
+      const {x, y, dist} = queue.shift()!;
+
+      for (const [dx, dy] of directions) {
+        const nx = x + dx;
+        const ny = y + dy;
+        const key = `${nx},${ny}`;
+
+        if (!canMove(nx, ny)) continue;
+        if (visited.has(key)) continue;
+
+        visited.set(key, {parentX: x, parentY: y, dist: dist + 1});
+        queue.push({x: nx, y: ny, dist: dist + 1});
+
+        if (nx === toX && ny === toY) {
+          targetReached = true;
+          break;
+        }
+      }
+    }
+
+    if (!targetReached) return null;
+
+    // Reconstruct path from target to source
+    const path: Array<{x: number; y: number}> = [];
+    let cx = toX, cy = toY;
+
+    while (cx !== fromX || cy !== fromY) {
+      path.unshift({x: cx, y: cy});
+      const info = visited.get(`${cx},${cy}`)!;
+      cx = info.parentX;
+      cy = info.parentY;
+    }
+
+    if (path.length === 0) return null;
+
+    const firstStep = path[0];
+
+    // Cache the path (excluding first step which we'll return now)
+    this.cachedPath = {
+      targetX: toX,
+      targetY: toY,
+      path: path.slice(1),
+      ignoreDanger
+    };
+
+    // Return direction to first step (deterministic - no random selection)
+    const dx = firstStep.x - fromX;
+    const dy = firstStep.y - fromY;
+    if (dx === 1) return Direction.RIGHT;
+    if (dx === -1) return Direction.LEFT;
+    if (dy === 1) return Direction.DOWN;
+    if (dy === -1) return Direction.UP;
+
+    return null;
   }
 
   private isValidCell(x: number, y: number): boolean {
@@ -977,5 +992,33 @@ export class SimpleAI {
 
   getDifficulty(): string {
     return 'easy';
+  }
+
+  // Debug method for halt detection
+  getDebugState(): {
+    strategy: string | null;
+    targetCommitment: { x: number; y: number; type: string } | null;
+    cachedPath: { targetX: number; targetY: number; pathLength: number } | null;
+    grid: Array<Array<{ isWalkable: boolean; isDangerous: boolean }>>;
+    lastDecision: { direction: Direction | null; placeBomb: boolean } | null;
+  } {
+    return {
+      strategy: this.currentStrategy?.type || null,
+      targetCommitment: this.targetCommitment ? {
+        x: this.targetCommitment.targetX,
+        y: this.targetCommitment.targetY,
+        type: this.targetCommitment.targetType
+      } : null,
+      cachedPath: this.cachedPath ? {
+        targetX: this.cachedPath.targetX,
+        targetY: this.cachedPath.targetY,
+        pathLength: this.cachedPath.path.length
+      } : null,
+      grid: this.grid.map(row => row.map(cell => ({
+        isWalkable: cell.isWalkable,
+        isDangerous: cell.isDangerous
+      }))),
+      lastDecision: this.lastDecision
+    };
   }
 }

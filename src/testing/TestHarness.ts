@@ -77,7 +77,6 @@ export class TestHarness {
     }
 
     const winner = testGame.getWinner();
-    const players = testGame.getPlayers();
     const roundDuration = (this.config.maxRoundTime! * 1000 - testGame.getRoundTime() * 1000) / 1000;
 
     const result: GameResult = {

@@ -12,7 +12,7 @@ export class MockRenderer {
     this.camera = new Camera();
   }
 
-  render(state: RenderState, interpolation: number, mapData: MapData): void {
+  render(_state: RenderState, _interpolation: number, _mapData: MapData): void {
   }
 
   getParticleSystem(): ParticleSystem {
@@ -23,7 +23,7 @@ export class MockRenderer {
     return this.camera;
   }
 
-  flashColor(color: string, duration: number): void {
+  flashColor(_color: string, _duration: number): void {
   }
 
   resize(): void {

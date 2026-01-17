@@ -22,13 +22,14 @@ import { Block } from './entities/Block';
 import { Explosion, ExplosionTile } from './entities/Explosion';
 import { PowerUp, PowerUpType } from './entities/PowerUp';
 import { TileType, MapData, ALL_MAPS } from './map/TileTypes';
-import { AIController } from './ai/AIController';
 import { SimpleAI } from './ai/SimpleAI';
 import { ScoreManager, ScoreEvent } from './core/ScoreManager';
 import { FloatingText } from './rendering/FloatingText';
 import { Camera } from './rendering/Camera';
 import {ParticleSystem} from "./rendering/ParticleSystem.ts";
 import { Telemetry } from './testing/Telemetry';
+import { aiTracker } from './testing/AITracker';
+import { haltDetector } from './testing/HaltDetector';
 
 export class Game {
   private renderer: Renderer;
@@ -222,6 +223,17 @@ export class Game {
       this.phase = GamePhase.PLAYING;
       SoundManager.play('gameStart');
       SoundManager.startMusic();
+      aiTracker.start(); // Start tracking AI for debugging
+
+      // Start halt detector with AI state callback
+      haltDetector.start();
+      haltDetector.setAIStateCallback((playerIndex: number) => {
+        const ai = this.aiControllers.get(playerIndex);
+        if (ai) {
+          return ai.getDebugState();
+        }
+        return null;
+      });
     }
   }
 
@@ -267,11 +279,18 @@ export class Game {
       // Record AI decision for telemetry
       const telemetry = Telemetry.getInstance();
       if (telemetry.isEnabled()) {
+        // Convert Direction enum to {x, y} delta
+        let directionDelta = { x: 0, y: 0 };
+        if (decision.direction === Direction.LEFT) directionDelta = { x: -1, y: 0 };
+        else if (decision.direction === Direction.RIGHT) directionDelta = { x: 1, y: 0 };
+        else if (decision.direction === Direction.UP) directionDelta = { x: 0, y: -1 };
+        else if (decision.direction === Direction.DOWN) directionDelta = { x: 0, y: 1 };
+
         telemetry.recordAIDecision({
           playerId: playerIndex,
           timestamp: currentTime,
           decision: {
-            direction: decision.direction || { x: 0, y: 0 },
+            direction: directionDelta,
             placeBomb: decision.placeBomb,
             reason: 'ai_decision',
           },
@@ -279,7 +298,7 @@ export class Game {
             position: { x: player.position.gridX, y: player.position.gridY },
             health: player.isPlayerAlive() ? 1 : 0,
             bombCount: player.maxBombs,
-            blastRadius: player.blastRadius,
+            blastRadius: player.bombRange,
           },
         });
       }
@@ -327,6 +346,11 @@ export class Game {
       } else {
         player.stopMoving();
       }
+
+      // Track AI movement for debugging
+      const isAI = this.aiPlayers.has(player.playerIndex);
+      aiTracker.trackMovement(player, direction, isAI);
+      haltDetector.trackPosition(player, isAI);
 
       // Check power-up collection
       this.checkPowerUpCollection(player);
@@ -956,6 +980,9 @@ export class Game {
     this.grid[gridY][gridX] = bomb;
     player.activeBombs++;
 
+    // Track bomb placement for debugging
+    aiTracker.trackBomb(player, bomb);
+
     SoundManager.play('bombPlace');
 
     // Visual effects for bomb placement
@@ -1268,6 +1295,7 @@ export class Game {
 
           // Check if player is on this explosion tile
           if (player.position.gridX === tile.gridX && player.position.gridY === tile.gridY) {
+            aiTracker.trackDeath(player);
             player.die();
           }
         }
@@ -1437,6 +1465,7 @@ export class Game {
           // ICE bombs freeze players (if they survive via shield)
           if (type === BombType.ICE) {
             const hadShield = player.hasShield();
+            aiTracker.trackDeath(player);
             player.die(); // Will consume shield if present
             if (hadShield && player.isPlayerAlive()) {
               // Player survived with shield - apply freeze
@@ -1449,6 +1478,7 @@ export class Game {
               );
             }
           } else {
+            aiTracker.trackDeath(player);
             player.die();
           }
         }
@@ -1765,5 +1795,11 @@ export class Game {
     this.phase = GamePhase.GAME_OVER;
     SoundManager.stopMusic();
     SoundManager.play('gameOver');
+
+    // Stop tracking and print AI analysis report
+    aiTracker.stop();
+    aiTracker.printReport();
+    haltDetector.stop();
+    haltDetector.printReport();
   }
 }

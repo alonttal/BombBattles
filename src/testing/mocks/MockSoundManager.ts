@@ -23,7 +23,7 @@ type SoundType =
   | 'diarrheaBomb';
 
 class MockSoundManagerClass {
-  playSound(type: SoundType, volume?: number): void {
+  playSound(_type: SoundType, _volume?: number): void {
   }
 
   playMusic(): void {
@@ -38,10 +38,10 @@ class MockSoundManagerClass {
   stopMenuMusic(): void {
   }
 
-  setMasterVolume(volume: number): void {
+  setMasterVolume(_volume: number): void {
   }
 
-  setMusicVolume(volume: number): void {
+  setMusicVolume(_volume: number): void {
   }
 
   toggleMute(): void {

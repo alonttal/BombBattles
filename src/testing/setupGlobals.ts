@@ -12,7 +12,7 @@ export function setupGlobalMocks(): void {
       Image: class MockImage {
         onload: any;
         onerror: any;
-        set src(value: string) {
+        set src(_value: string) {
           setTimeout(() => {
             if (this.onload) this.onload();
           }, 0);
@@ -185,7 +185,7 @@ export function setupGlobalMocks(): void {
     (global as any).Image = class MockImage {
       onload: any;
       onerror: any;
-      set src(value: string) {
+      set src(_value: string) {
         setTimeout(() => {
           if (this.onload) this.onload();
         }, 0);
