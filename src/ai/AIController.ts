@@ -1,9 +1,9 @@
-import {Player} from '../entities/Player';
+import {Player, BombType} from '../entities/Player';
 import {Block} from '../entities/Block';
 import {Bomb} from '../entities/Bomb';
-import {PowerUp} from '../entities/PowerUp';
+import {PowerUp, PowerUpType} from '../entities/PowerUp';
 import {Explosion} from '../entities/Explosion';
-import {Direction, GRID_HEIGHT, GRID_WIDTH, EXPLOSION_DURATION, BOMB_FUSE_TIME} from '../constants';
+import {Direction, GRID_HEIGHT, GRID_WIDTH, EXPLOSION_DURATION, BOMB_FUSE_TIME, FIRE_LINGER_DURATION, MAX_BOMB_COUNT, MAX_BOMB_RANGE, MAX_SPEED} from '../constants';
 import {Pathfinder, GridCell} from './Pathfinder';
 
 interface DangerCell {
@@ -11,9 +11,20 @@ interface DangerCell {
   y: number;
   isWalkable: boolean;
   dangerTime: number;
+  dangerEndTime: number;      // When danger ends (for fire bomb lingering)
+  bombType: BombType | null;  // Track bomb type causing danger
   hasBomb: boolean;
   hasPowerUp: boolean;
   hasDestructibleBlock: boolean;
+}
+
+// Cache of enemy abilities for tactical decisions
+interface EnemyAbilityCache {
+  hasKick: boolean;
+  hasPunch: boolean;
+  hasShield: boolean;
+  hasTeleport: boolean;
+  bombType: BombType;
 }
 
 interface DifficultySettings {
@@ -65,6 +76,28 @@ const DIFFICULTY_PRESETS: Record<string, DifficultySettings> = {
   }
 };
 
+// Power-up priority scores for smart collection
+const POWERUP_PRIORITIES: Record<PowerUpType, number> = {
+  // HIGH (100+) - survival and core power
+  [PowerUpType.SHIELD]: 150,
+  [PowerUpType.FIRE_UP]: 120,
+  [PowerUpType.BOMB_UP]: 110,
+
+  // MEDIUM (50-99) - useful abilities
+  [PowerUpType.SPEED_UP]: 80,
+  [PowerUpType.KICK]: 70,
+  [PowerUpType.PUNCH]: 65,
+  [PowerUpType.FIRE_BOMB]: 60,
+  [PowerUpType.ICE_BOMB]: 55,
+  [PowerUpType.PIERCING_BOMB]: 50,
+
+  // LOW (1-49)
+  [PowerUpType.TELEPORT]: 30,
+
+  // AVOID - harmful
+  [PowerUpType.SKULL]: -100,
+};
+
 export class AIController {
   private player: Player;
   private difficulty: 'easy' | 'medium' | 'hard';
@@ -74,6 +107,9 @@ export class AIController {
   private lastDirection: Direction | null = null;
   private committedEscapeDirection: Direction | null = null; // Direction committed to after placing bomb
   private escapeCommitTime: number = -10; // When we committed to escape direction
+
+  // Enemy ability tracking
+  private enemyAbilities: Map<number, EnemyAbilityCache> = new Map();
 
   // Pathfinding state
   private currentPath: { x: number; y: number }[] | null = null;
@@ -104,16 +140,32 @@ export class AIController {
     }
     this.lastDecisionTime = currentTime;
 
+    // Update enemy ability tracking for tactical decisions
+    this.updateEnemyAbilities(players);
+
     const grid = this.buildDangerGrid(blocks, bombs, explosions, powerUps);
+
+    // Get kick/punch threat zones for medium/hard difficulty
+    let kickThreats: Set<string> = new Set();
+    let punchThreats: Set<string> = new Set();
+    if (this.difficulty === 'hard' || this.difficulty === 'medium') {
+      kickThreats = this.getKickThreatZones(bombs, players, grid);
+      punchThreats = this.getPunchThreatZones(bombs, players, grid);
+    }
     const myX = this.player.position.gridX;
     const myY = this.player.position.gridY;
     const myCell = grid[myY]?.[myX];
 
+    // Check if we're in a kick/punch threat zone (enemies might send bombs our way)
+    const myKey = `${myX},${myY}`;
+    const inKickThreat = kickThreats.has(myKey);
+    const inPunchThreat = punchThreats.has(myKey);
+
     // PRIORITY 1: Escape from danger (check FIRST, even during commitment!)
     // If we're in danger, we MUST escape - commitment can't block this
-    if (myCell && myCell.dangerTime < Infinity) {
+    // Also escape if in kick/punch threat zones (medium/hard difficulty)
+    if (myCell && (myCell.dangerTime < Infinity || inKickThreat || inPunchThreat)) {
       const escapeDir = this.findSafeDirection(grid, myX, myY);
-      console.log(this.player.playerIndex + " " + escapeDir);
       this.lastDirection = escapeDir;
 
       // If we were committed but still in danger, the commitment was wrong - clear it
@@ -140,7 +192,16 @@ export class AIController {
       this.committedEscapeDirection = null;
     }
 
-    // PRIORITY 3: Try to attack nearby enemies
+    // PRIORITY 3: Collect HIGH-VALUE power-ups (SHIELD, FIRE_UP, BOMB_UP) before attacking
+    // These are valuable enough to prioritize over combat
+    const highPriorityPowerUp = this.findHighPriorityPowerUp(grid, powerUps, myX, myY);
+    if (highPriorityPowerUp) {
+      const dir = this.getMoveTowardDirection(highPriorityPowerUp.x, highPriorityPowerUp.y, myX, myY, grid, currentTime);
+      this.lastDirection = dir;
+      return {direction: dir, placeBomb: false};
+    }
+
+    // PRIORITY 4: Try to attack nearby enemies
     const nearestEnemy = this.findNearestEnemy(players, myX, myY);
     const canPlaceBomb = this.player.canPlaceBomb() &&
       (currentTime - this.lastBombTime) > this.settings.minBombCooldown;
@@ -833,7 +894,7 @@ export class AIController {
     myX: number,
     myY: number
   ): { x: number; y: number } | null {
-    let nearest: { x: number; y: number; dist: number } | null = null;
+    let bestPowerUp: { x: number; y: number; score: number } | null = null;
 
     for (const powerUp of powerUps) {
       if (!powerUp.isActive) continue;
@@ -841,18 +902,130 @@ export class AIController {
       const px = powerUp.position.gridX;
       const py = powerUp.position.gridY;
 
+      // Skip if in danger
       const cell = grid[py]?.[px];
       if (!cell || cell.dangerTime < Infinity) continue;
 
       const dist = Math.abs(px - myX) + Math.abs(py - myY);
 
-      // Only pick up close power-ups
-      if (dist <= 6 && (!nearest || dist < nearest.dist)) {
-        nearest = {x: px, y: py, dist};
+      // Get base priority for this power-up type
+      const basePriority = POWERUP_PRIORITIES[powerUp.type] ?? 0;
+
+      // Skip SKULL power-ups entirely (negative priority)
+      if (basePriority < 0) continue;
+
+      // Extend search range for high priority items
+      const maxRange = basePriority >= 100 ? 10 : 6;
+      if (dist > maxRange) continue;
+
+      // Calculate score: priority / distance (with minimum distance of 1)
+      let score = basePriority / Math.max(1, dist);
+
+      // Context-aware adjustments
+      // If we already have shield, deprioritize another
+      if (powerUp.type === PowerUpType.SHIELD && this.player.hasShield()) {
+        score *= 0.3;
+      }
+
+      // If we already have kick, deprioritize another
+      if (powerUp.type === PowerUpType.KICK && this.player.hasAbility('kick')) {
+        score *= 0.2;
+      }
+
+      // If we already have punch, deprioritize another
+      if (powerUp.type === PowerUpType.PUNCH && this.player.hasAbility('punch')) {
+        score *= 0.2;
+      }
+
+      // If we already have teleport, deprioritize another
+      if (powerUp.type === PowerUpType.TELEPORT && this.player.hasAbility('teleport')) {
+        score *= 0.3;
+      }
+
+      // At no shield, heavily prioritize getting one
+      if (powerUp.type === PowerUpType.SHIELD && !this.player.hasShield()) {
+        score *= 1.5;
+      }
+
+      // If at max bombs, deprioritize BOMB_UP
+      if (powerUp.type === PowerUpType.BOMB_UP && this.player.maxBombs >= MAX_BOMB_COUNT) {
+        score *= 0.1;
+      }
+
+      // If at max range, deprioritize FIRE_UP
+      if (powerUp.type === PowerUpType.FIRE_UP && this.player.bombRange >= MAX_BOMB_RANGE) {
+        score *= 0.1;
+      }
+
+      // If at max speed, deprioritize SPEED_UP
+      if (powerUp.type === PowerUpType.SPEED_UP && this.player.speed >= MAX_SPEED) {
+        score *= 0.1;
+      }
+
+      if (!bestPowerUp || score > bestPowerUp.score) {
+        bestPowerUp = { x: px, y: py, score };
       }
     }
 
-    return nearest;
+    return bestPowerUp;
+  }
+
+  // Find high-priority power-ups that are worth prioritizing over combat
+  private findHighPriorityPowerUp(
+    grid: DangerCell[][],
+    powerUps: PowerUp[],
+    myX: number,
+    myY: number
+  ): { x: number; y: number } | null {
+    const HIGH_PRIORITY_THRESHOLD = 100; // SHIELD=150, FIRE_UP=120, BOMB_UP=110
+    const MAX_RANGE = 4; // Only go for nearby high-priority items
+
+    let bestPowerUp: { x: number; y: number; score: number } | null = null;
+
+    for (const powerUp of powerUps) {
+      if (!powerUp.isActive) continue;
+
+      const px = powerUp.position.gridX;
+      const py = powerUp.position.gridY;
+
+      // Skip if in danger
+      const cell = grid[py]?.[px];
+      if (!cell || cell.dangerTime < Infinity) continue;
+
+      const dist = Math.abs(px - myX) + Math.abs(py - myY);
+      if (dist > MAX_RANGE) continue;
+
+      // Get base priority for this power-up type
+      const basePriority = POWERUP_PRIORITIES[powerUp.type] ?? 0;
+
+      // Only consider high-priority power-ups
+      if (basePriority < HIGH_PRIORITY_THRESHOLD) continue;
+
+      // Calculate score with context awareness
+      let score = basePriority / Math.max(1, dist);
+
+      // Skip if we already have this at max
+      if (powerUp.type === PowerUpType.SHIELD && this.player.hasShield()) {
+        continue; // Already have shield, don't prioritize another
+      }
+      if (powerUp.type === PowerUpType.BOMB_UP && this.player.maxBombs >= MAX_BOMB_COUNT) {
+        continue;
+      }
+      if (powerUp.type === PowerUpType.FIRE_UP && this.player.bombRange >= MAX_BOMB_RANGE) {
+        continue;
+      }
+
+      // Extra priority for SHIELD when we don't have one
+      if (powerUp.type === PowerUpType.SHIELD && !this.player.hasShield()) {
+        score *= 2.0;
+      }
+
+      if (!bestPowerUp || score > bestPowerUp.score) {
+        bestPowerUp = { x: px, y: py, score };
+      }
+    }
+
+    return bestPowerUp;
   }
 
   private buildDangerGrid(
@@ -872,6 +1045,8 @@ export class AIController {
           y,
           isWalkable: true,
           dangerTime: Infinity,
+          dangerEndTime: Infinity,
+          bombType: null,
           hasBomb: false,
           hasPowerUp: false,
           hasDestructibleBlock: false
@@ -896,15 +1071,24 @@ export class AIController {
       const bx = bomb.position.gridX;
       const by = bomb.position.gridY;
       const explodeTime = bomb.timer;
+      const bombType = bomb.type;
+
+      // Calculate danger duration based on bomb type
+      let dangerDuration = EXPLOSION_DURATION;
+      if (bombType === BombType.FIRE) {
+        dangerDuration += FIRE_LINGER_DURATION; // Fire bombs linger 2.5s total
+      }
 
       if (grid[by]?.[bx]) {
         grid[by][bx].isWalkable = false;
         grid[by][bx].hasBomb = true;
+        grid[by][bx].bombType = bombType;
         grid[by][bx].dangerTime = Math.min(grid[by][bx].dangerTime, explodeTime);
+        grid[by][bx].dangerEndTime = Math.min(grid[by][bx].dangerEndTime, explodeTime + dangerDuration);
       }
 
-      // Mark blast zones
-      this.markBlastZone(grid, bx, by, bomb.range, explodeTime);
+      // Mark blast zones with bomb type awareness
+      this.markBlastZone(grid, bx, by, bomb.range, explodeTime, bombType);
     }
 
     // Handle chain reactions
@@ -921,7 +1105,7 @@ export class AIController {
         if (!bombCell) continue;
 
         if (bombCell.dangerTime < bomb.timer) {
-          const wasChanged = this.markBlastZone(grid, bomb.position.gridX, bomb.position.gridY, bomb.range, bombCell.dangerTime);
+          const wasChanged = this.markBlastZone(grid, bomb.position.gridX, bomb.position.gridY, bomb.range, bombCell.dangerTime, bomb.type);
           if (wasChanged) changed = true;
         }
       }
@@ -944,19 +1128,32 @@ export class AIController {
       }
     }
 
-    // Mark power-ups
+    // Mark power-ups (and avoid SKULL - treat as dangerous!)
     for (const powerUp of powerUps) {
       if (!powerUp.isActive) continue;
       const cell = grid[powerUp.position.gridY]?.[powerUp.position.gridX];
       if (cell) {
         cell.hasPowerUp = true;
+
+        // SKULL power-ups are dangerous - AI should avoid them!
+        if (powerUp.type === PowerUpType.SKULL) {
+          cell.dangerTime = 0; // Mark as immediately dangerous
+          cell.dangerEndTime = Infinity; // Stays dangerous forever (until collected)
+        }
       }
     }
 
     return grid;
   }
 
-  private markBlastZone(grid: DangerCell[][], bx: number, by: number, range: number, dangerTime: number): boolean {
+  private markBlastZone(
+    grid: DangerCell[][],
+    bx: number,
+    by: number,
+    range: number,
+    dangerTime: number,
+    bombType: BombType = BombType.NORMAL
+  ): boolean {
     let changed = false;
     const directions = [
       {dx: 0, dy: -1},
@@ -964,6 +1161,13 @@ export class AIController {
       {dx: -1, dy: 0},
       {dx: 1, dy: 0}
     ];
+
+    // Calculate danger end time based on bomb type
+    let dangerDuration = EXPLOSION_DURATION;
+    if (bombType === BombType.FIRE) {
+      dangerDuration += FIRE_LINGER_DURATION; // Fire bombs linger 2.5s total
+    }
+    const dangerEndTime = dangerTime + dangerDuration;
 
     for (const {dx, dy} of directions) {
       for (let i = 1; i <= range; i++) {
@@ -975,21 +1179,142 @@ export class AIController {
         const cell = grid[ty][tx];
 
         if (!cell.isWalkable && !cell.hasBomb) {
-          if (cell.hasDestructibleBlock && cell.dangerTime > dangerTime) {
+          if (cell.hasDestructibleBlock) {
+            // Mark destructible block as dangerous
+            if (cell.dangerTime > dangerTime) {
+              cell.dangerTime = dangerTime;
+              cell.dangerEndTime = Math.min(cell.dangerEndTime, dangerEndTime);
+              cell.bombType = bombType;
+              changed = true;
+            }
+            // PIERCING bombs continue through destructible blocks!
+            if (bombType !== BombType.PIERCING) {
+              break;
+            }
+            // For piercing, continue to next tile
+          } else {
+            // Indestructible wall - always stops
+            break;
+          }
+        } else {
+          // Walkable cell or bomb cell
+          if (cell.dangerTime > dangerTime) {
             cell.dangerTime = dangerTime;
+            cell.dangerEndTime = Math.min(cell.dangerEndTime, dangerEndTime);
+            cell.bombType = bombType;
             changed = true;
           }
-          break;
-        }
-
-        if (cell.dangerTime > dangerTime) {
-          cell.dangerTime = dangerTime;
-          changed = true;
         }
       }
     }
 
     return changed;
+  }
+
+  // Update cache of enemy abilities for tactical decisions
+  private updateEnemyAbilities(players: Player[]): void {
+    for (const player of players) {
+      if (player === this.player || !player.isPlayerAlive()) continue;
+
+      this.enemyAbilities.set(player.playerIndex, {
+        hasKick: player.hasAbility('kick'),
+        hasPunch: player.hasAbility('punch'),
+        hasShield: player.hasShield(),
+        hasTeleport: player.hasAbility('teleport'),
+        bombType: player.bombType
+      });
+    }
+  }
+
+  // Get tiles threatened by enemies with kick ability
+  private getKickThreatZones(bombs: Bomb[], players: Player[], grid: DangerCell[][]): Set<string> {
+    const threatZones = new Set<string>();
+
+    for (const player of players) {
+      if (player === this.player || !player.isPlayerAlive()) continue;
+
+      const abilities = this.enemyAbilities.get(player.playerIndex);
+      if (!abilities?.hasKick) continue;
+
+      const px = player.position.gridX;
+      const py = player.position.gridY;
+
+      // Find bombs adjacent to this player
+      for (const bomb of bombs) {
+        if (!bomb.isActive) continue;
+
+        const bx = bomb.position.gridX;
+        const by = bomb.position.gridY;
+        const dist = Math.abs(bx - px) + Math.abs(by - py);
+
+        if (dist === 1) {
+          // Player is adjacent to bomb - could kick it!
+          // Calculate kick direction (away from player)
+          const kickDx = bx - px;
+          const kickDy = by - py;
+
+          // Mark all tiles in kick direction as potential threats
+          for (let i = 0; i < 8; i++) {
+            const tx = bx + kickDx * i;
+            const ty = by + kickDy * i;
+
+            if (tx < 0 || tx >= GRID_WIDTH || ty < 0 || ty >= GRID_HEIGHT) break;
+
+            const cell = grid[ty]?.[tx];
+            if (!cell?.isWalkable && !cell?.hasBomb) break;
+
+            threatZones.add(`${tx},${ty}`);
+          }
+        }
+      }
+    }
+
+    return threatZones;
+  }
+
+  // Get tiles threatened by enemies with punch ability
+  private getPunchThreatZones(bombs: Bomb[], players: Player[], grid: DangerCell[][]): Set<string> {
+    const threatZones = new Set<string>();
+    const PUNCH_RANGE = 3;
+
+    for (const player of players) {
+      if (player === this.player || !player.isPlayerAlive()) continue;
+
+      const abilities = this.enemyAbilities.get(player.playerIndex);
+      if (!abilities?.hasPunch) continue;
+
+      const px = player.position.gridX;
+      const py = player.position.gridY;
+
+      // Find bombs near this player
+      for (const bomb of bombs) {
+        if (!bomb.isActive) continue;
+
+        const bx = bomb.position.gridX;
+        const by = bomb.position.gridY;
+        const dist = Math.abs(bx - px) + Math.abs(by - py);
+
+        if (dist === 1) {
+          // Player can punch this bomb in an arc
+          // Mark a ~3 tile radius around the bomb as threat zone
+          for (let dx = -PUNCH_RANGE; dx <= PUNCH_RANGE; dx++) {
+            for (let dy = -PUNCH_RANGE; dy <= PUNCH_RANGE; dy++) {
+              const tx = bx + dx;
+              const ty = by + dy;
+
+              if (tx < 0 || tx >= GRID_WIDTH || ty < 0 || ty >= GRID_HEIGHT) continue;
+
+              const cell = grid[ty]?.[tx];
+              if (!cell?.isWalkable) continue;
+
+              threatZones.add(`${tx},${ty}`);
+            }
+          }
+        }
+      }
+    }
+
+    return threatZones;
   }
 
   // Convert DangerCell grid to GridCell for Pathfinder

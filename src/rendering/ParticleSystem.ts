@@ -121,6 +121,19 @@ export const PARTICLE_PRESETS = {
     shape: 'pixel' as const
   },
 
+  ashes: {
+    count: 40,
+    spread: 20,
+    speed: { min: 30, max: 80 },
+    angle: { min: -Math.PI * 0.8, max: -Math.PI * 0.2 }, // Mostly upward initially
+    lifetime: { min: 1.0, max: 2.0 },
+    size: { min: 2, max: 6 },
+    colors: ['#1a1a1a', '#2d2d2d', '#404040', '#333333'],
+    gravity: 80, // Falls slowly like ash
+    friction: 0.98,
+    shape: 'pixel' as const
+  },
+
   smoke: {
     count: 8,
     spread: 6,

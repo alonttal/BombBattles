@@ -406,7 +406,7 @@ export class Game {
 
       case GamePhase.GAME_OVER:
         this.renderGameState(interpolation);
-        this.renderer.renderGameOver(this.winner);
+        this.renderer.renderGameOver(this.winner, this.isSinglePlayer);
         break;
     }
   }
@@ -1626,16 +1626,24 @@ export class Game {
     const player = data.player;
     const particles = this.renderer.getParticleSystem();
     const camera = this.renderer.getCamera();
-    const playerColors = [COLORS.player1, COLORS.player2, COLORS.player3, COLORS.player4];
 
-    // Death particles in player's color
     const centerX = player.position.pixelX + TILE_SIZE / 2;
     const centerY = player.position.pixelY + TILE_SIZE / 2;
+
+    // Initial fire/smoke burst when hit
     particles.emitPreset('death', centerX, centerY, [
-      playerColors[player.playerIndex],
-      '#ffffff',
-      '#000000'
+      '#ff6600',
+      '#ff3300',
+      '#ffaa00'
     ]);
+
+    // Emit ashes when crumble phase starts (after ~330ms burn phase)
+    setTimeout(() => {
+      // Multiple waves of ashes falling
+      particles.emitPreset('ashes', centerX, centerY);
+      setTimeout(() => particles.emitPreset('ashes', centerX, centerY + 5), 100);
+      setTimeout(() => particles.emitPreset('ashes', centerX, centerY + 10), 200);
+    }, 330);
 
     // Screen shake for dramatic effect
     camera.shakePreset('playerDeath');
@@ -1657,31 +1665,40 @@ export class Game {
 
     if (alivePlayers.length <= 1) {
       this.winner = alivePlayers.length === 1 ? alivePlayers[0] : null;
-      this.phase = GamePhase.GAME_OVER;
+
+      // Delay before showing game over screen to let death animation play
+      const gameOverDelay = 1500; // 1.5 seconds to see death + ashes
+
+      // Stop music immediately for dramatic effect
       SoundManager.stopMusic();
-      SoundManager.play('gameOver');
 
-      // Victory confetti effect
-      if (this.winner) {
-        const winnerX = this.winner.position.pixelX + TILE_SIZE / 2;
-        const winnerY = this.winner.position.pixelY + TILE_SIZE / 2;
+      // Transition to game over after delay
+      setTimeout(() => {
+        this.phase = GamePhase.GAME_OVER;
+        SoundManager.play('gameOver');
 
-        // Emit confetti at winner's position
-        for (let i = 0; i < 3; i++) {
-          setTimeout(() => {
-            this.particleSystem.emitPreset('confetti', winnerX, winnerY);
-          }, i * 150);
+        // Victory confetti effect
+        if (this.winner) {
+          const winnerX = this.winner.position.pixelX + TILE_SIZE / 2;
+          const winnerY = this.winner.position.pixelY + TILE_SIZE / 2;
+
+          // Emit confetti at winner's position
+          for (let i = 0; i < 3; i++) {
+            setTimeout(() => {
+              this.particleSystem.emitPreset('confetti', winnerX, winnerY);
+            }, i * 150);
+          }
+
+          // Emit confetti at random locations for celebration
+          for (let i = 0; i < 4; i++) {
+            setTimeout(() => {
+              const randomX = Math.random() * CANVAS_WIDTH;
+              const randomY = Math.random() * CANVAS_HEIGHT * 0.7; // Top 70% of screen
+              this.particleSystem.emitPreset('confetti', randomX, randomY);
+            }, i * 200);
+          }
         }
-
-        // Emit confetti at random locations for celebration
-        for (let i = 0; i < 4; i++) {
-          setTimeout(() => {
-            const randomX = Math.random() * CANVAS_WIDTH;
-            const randomY = Math.random() * CANVAS_HEIGHT * 0.7; // Top 70% of screen
-            this.particleSystem.emitPreset('confetti', randomX, randomY);
-          }, i * 200);
-        }
-      }
+      }, gameOverDelay);
 
       // Dramatic slow motion zoom? Or just zoom
       this.renderer.getCamera().zoomTo(1.1, 1.0);

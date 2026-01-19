@@ -772,7 +772,7 @@ export class Renderer {
     this.ctx.restore();
   }
 
-  renderGameOver(winner: Player | null): void {
+  renderGameOver(winner: Player | null, isSinglePlayer: boolean = false): void {
     this.ctx.save();
     this.ctx.scale(this.scale, this.scale);
 
@@ -790,30 +790,56 @@ export class Renderer {
         RETRO_PALETTE.player3,
         RETRO_PALETTE.player4
       ];
+      const colorNames = ['RED', 'BLUE', 'GREEN', 'YELLOW'];
       const winnerColor = retro_colors[winner.playerIndex];
 
-      // "PLAYER X" text
-      PixelFont.drawTextWithOutline(
-        this.ctx,
-        `PLAYER ${winner.playerIndex + 1}`,
-        centerX,
-        centerY - 80,
-        4,
-        winnerColor,
-        '#000000'
-      );
-
-      // "WINS!" text with blinking
       const blink = Math.floor(Date.now() / 300) % 2 === 0;
-      PixelFont.drawTextWithOutline(
-        this.ctx,
-        'WINS!',
-        centerX,
-        centerY - 20,
-        5,
-        blink ? '#ffffff' : RETRO_PALETTE.uiGold,
-        '#000000'
-      );
+
+      if (isSinglePlayer && winner.playerIndex === 0) {
+        // Single player mode - player won
+        PixelFont.drawTextWithOutline(
+          this.ctx,
+          'YOU WIN!',
+          centerX,
+          centerY - 50,
+          5,
+          blink ? '#ffffff' : RETRO_PALETTE.uiGold,
+          '#000000'
+        );
+      } else if (isSinglePlayer && winner.playerIndex !== 0) {
+        // Single player mode - AI won (player lost)
+        PixelFont.drawTextWithOutline(
+          this.ctx,
+          'YOU LOSE!',
+          centerX,
+          centerY - 50,
+          5,
+          blink ? '#ffffff' : RETRO_PALETTE.uiRed,
+          '#000000'
+        );
+      } else {
+        // Multiplayer mode - show color name
+        PixelFont.drawTextWithOutline(
+          this.ctx,
+          `${colorNames[winner.playerIndex]} PLAYER`,
+          centerX,
+          centerY - 80,
+          4,
+          winnerColor,
+          '#000000'
+        );
+
+        // "WINS!" text with blinking
+        PixelFont.drawTextWithOutline(
+          this.ctx,
+          'WINS!',
+          centerX,
+          centerY - 20,
+          5,
+          blink ? '#ffffff' : RETRO_PALETTE.uiGold,
+          '#000000'
+        );
+      }
     } else {
       // "DRAW!" text with blinking
       const blink = Math.floor(Date.now() / 300) % 2 === 0;

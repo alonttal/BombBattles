@@ -154,7 +154,7 @@ export class Player extends Entity {
 
   update(deltaTime: number): void {
     if (!this.isAlive) {
-      this.deathAnimationProgress += deltaTime * 2;
+      this.deathAnimationProgress += deltaTime * 1.2; // Slower for burn + crumble effect
       if (this.deathAnimationProgress >= 1) {
         this.isActive = false;
       }
@@ -364,21 +364,35 @@ export class Player extends Entity {
     const color = PLAYER_COLORS[this.playerIndex];
 
     if (!this.isAlive) {
-      // Death animation: Spin and shrink
+      // Death animation: Burn to black, then crumble to ashes
       const progress = this.deathAnimationProgress;
-      const scale = 1 - progress;
-      const rotation = progress * Math.PI * 4; // 2 spins
+      const burnPhase = Math.min(1, progress / 0.4); // 0-0.4: turn black
+      const crumblePhase = Math.max(0, (progress - 0.4) / 0.6); // 0.4-1.0: crumble
 
       ctx.save();
       ctx.translate(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
-      ctx.rotate(rotation);
-      ctx.scale(scale, scale);
+
+      // During crumble phase: slight shake and sink
+      if (crumblePhase > 0) {
+        const shake = Math.sin(progress * 50) * 2 * (1 - crumblePhase);
+        const sink = crumblePhase * 10;
+        ctx.translate(shake, sink);
+
+        // Scale down as it crumbles
+        const scale = 1 - crumblePhase * 0.5;
+        ctx.scale(scale, scale);
+      }
+
       ctx.translate(-(x + TILE_SIZE / 2), -(y + TILE_SIZE / 2));
 
-      ctx.globalAlpha = Math.max(0, 1 - progress);
-      this.drawPlayer(ctx, x, y, color);
-      ctx.globalAlpha = 1;
+      // Fade out during crumble
+      ctx.globalAlpha = Math.max(0, 1 - crumblePhase);
 
+      // Draw burned player (interpolate color toward black)
+      const burnedColor = this.interpolateToBlack(color, burnPhase);
+      this.drawPlayer(ctx, x, y, burnedColor);
+
+      ctx.globalAlpha = 1;
       ctx.restore();
       return;
     }
@@ -625,6 +639,24 @@ export class Player extends Entity {
     }
 
     ctx.restore();
+  }
+
+  private interpolateToBlack(hexColor: string, t: number): string {
+    // Parse hex color
+    const r = parseInt(hexColor.slice(1, 3), 16);
+    const g = parseInt(hexColor.slice(3, 5), 16);
+    const b = parseInt(hexColor.slice(5, 7), 16);
+
+    // Interpolate toward black (with a slight dark gray tint for burned look)
+    const targetR = 20;
+    const targetG = 15;
+    const targetB = 10;
+
+    const newR = Math.round(r + (targetR - r) * t);
+    const newG = Math.round(g + (targetG - g) * t);
+    const newB = Math.round(b + (targetB - b) * t);
+
+    return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
   }
 
   private getFeetPattern(): string[] {
