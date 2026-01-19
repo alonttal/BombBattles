@@ -22,11 +22,14 @@ import { Block } from './entities/Block';
 import { Explosion, ExplosionTile } from './entities/Explosion';
 import { PowerUp, PowerUpType } from './entities/PowerUp';
 import { TileType, MapData, ALL_MAPS } from './map/TileTypes';
-import { AIController } from './ai/AIController';
+import { SimpleAI } from './ai/SimpleAI';
 import { ScoreManager, ScoreEvent } from './core/ScoreManager';
 import { FloatingText } from './rendering/FloatingText';
 import { Camera } from './rendering/Camera';
 import {ParticleSystem} from "./rendering/ParticleSystem.ts";
+import { Telemetry } from './testing/Telemetry';
+import { aiTracker } from './testing/AITracker';
+import { haltDetector } from './testing/HaltDetector';
 
 export class Game {
   private renderer: Renderer;
@@ -52,7 +55,7 @@ export class Game {
   private winner: Player | null = null;
 
   // AI support
-  private aiControllers: Map<number, AIController> = new Map();
+  private aiControllers: Map<number, SimpleAI> = new Map();
   private aiPlayers: Set<number> = new Set();
   private isSinglePlayer: boolean = false;
   private aiDifficulty: 'easy' | 'medium' | 'hard' = 'medium';
@@ -220,6 +223,17 @@ export class Game {
       this.phase = GamePhase.PLAYING;
       SoundManager.play('gameStart');
       SoundManager.startMusic();
+      aiTracker.start(); // Start tracking AI for debugging
+
+      // Start halt detector with AI state callback
+      haltDetector.start();
+      haltDetector.setAIStateCallback((playerIndex: number) => {
+        const ai = this.aiControllers.get(playerIndex);
+        if (ai) {
+          return ai.getDebugState();
+        }
+        return null;
+      });
     }
   }
 
@@ -261,6 +275,33 @@ export class Game {
         this.players
       );
       aiDecisions.set(playerIndex, decision);
+
+      // Record AI decision for telemetry
+      const telemetry = Telemetry.getInstance();
+      if (telemetry.isEnabled()) {
+        // Convert Direction enum to {x, y} delta
+        let directionDelta = { x: 0, y: 0 };
+        if (decision.direction === Direction.LEFT) directionDelta = { x: -1, y: 0 };
+        else if (decision.direction === Direction.RIGHT) directionDelta = { x: 1, y: 0 };
+        else if (decision.direction === Direction.UP) directionDelta = { x: 0, y: -1 };
+        else if (decision.direction === Direction.DOWN) directionDelta = { x: 0, y: 1 };
+
+        telemetry.recordAIDecision({
+          playerId: playerIndex,
+          timestamp: currentTime,
+          decision: {
+            direction: directionDelta,
+            placeBomb: decision.placeBomb,
+            reason: 'ai_decision',
+          },
+          gameState: {
+            position: { x: player.position.gridX, y: player.position.gridY },
+            health: player.isPlayerAlive() ? 1 : 0,
+            bombCount: player.maxBombs,
+            blastRadius: player.bombRange,
+          },
+        });
+      }
     }
 
     // Update player input and movement
@@ -305,6 +346,11 @@ export class Game {
       } else {
         player.stopMoving();
       }
+
+      // Track AI movement for debugging
+      const isAI = this.aiPlayers.has(player.playerIndex);
+      aiTracker.trackMovement(player, direction, isAI);
+      haltDetector.trackPosition(player, isAI);
 
       // Check power-up collection
       this.checkPowerUpCollection(player);
@@ -483,7 +529,7 @@ export class Game {
       // In single player mode, all players except the first one are AI
       if (this.isSinglePlayer && i > 0) {
         this.aiPlayers.add(i);
-        const aiController = new AIController(player, this.aiDifficulty);
+        const aiController = new SimpleAI(player, this.aiDifficulty);
         this.aiControllers.set(i, aiController);
       }
     }
@@ -934,6 +980,9 @@ export class Game {
     this.grid[gridY][gridX] = bomb;
     player.activeBombs++;
 
+    // Track bomb placement for debugging
+    aiTracker.trackBomb(player, bomb);
+
     SoundManager.play('bombPlace');
 
     // Visual effects for bomb placement
@@ -1050,8 +1099,17 @@ export class Game {
     this.renderer.getCamera().shake({ duration: 0.15, intensity: 3, frequency: 25 });
   }
 
-  private onBombPlaced(_data: { gridX: number; gridY: number; owner: Player }): void {
-    // Event handling is done in tryPlaceBomb
+  private onBombPlaced(data: { gridX: number; gridY: number; owner: Player }): void {
+    // Record bomb placement for telemetry
+    const telemetry = Telemetry.getInstance();
+    if (telemetry.isEnabled()) {
+      telemetry.recordEvent({
+        type: 'bomb_placed',
+        timestamp: performance.now() / 1000,
+        playerId: data.owner.playerIndex,
+        position: { x: data.gridX, y: data.gridY },
+      });
+    }
   }
 
   private getOppositeTileFromBomb(bomb: Bomb, direction: Direction): { gridX: number; gridY: number } {
@@ -1237,6 +1295,7 @@ export class Game {
 
           // Check if player is on this explosion tile
           if (player.position.gridX === tile.gridX && player.position.gridY === tile.gridY) {
+            aiTracker.trackDeath(player);
             player.die();
           }
         }
@@ -1273,6 +1332,7 @@ export class Game {
     let chainReactionCount = 0;
 
     for (const { dir, dx, dy } of directions) {
+      let blocksPierced = 0;
       for (let i = 1; i <= range; i++) {
         const tx = gridX + dx * i;
         const ty = gridY + dy * i;
@@ -1295,6 +1355,9 @@ export class Game {
             this.grid[ty][tx] = null;
             tiles.push({ gridX: tx, gridY: ty, direction: dir, isEnd: true });
             if (type !== BombType.PIERCING) break;
+            // Piercing bombs can only pierce through up to 2 blocks per direction
+            blocksPierced++;
+            if (blocksPierced >= 2) break;
           } else {
             break; // Hit indestructible wall
           }
@@ -1402,6 +1465,7 @@ export class Game {
           // ICE bombs freeze players (if they survive via shield)
           if (type === BombType.ICE) {
             const hadShield = player.hasShield();
+            aiTracker.trackDeath(player);
             player.die(); // Will consume shield if present
             if (hadShield && player.isPlayerAlive()) {
               // Player survived with shield - apply freeze
@@ -1414,6 +1478,7 @@ export class Game {
               );
             }
           } else {
+            aiTracker.trackDeath(player);
             player.die();
           }
         }
@@ -1446,6 +1511,17 @@ export class Game {
   }
 
   private onBlockDestroyed(data: { gridX: number; gridY: number; destroyer?: Player }): void {
+    // Record block destruction for telemetry
+    const telemetry = Telemetry.getInstance();
+    if (telemetry.isEnabled() && data.destroyer) {
+      telemetry.recordEvent({
+        type: 'block_destroyed',
+        timestamp: performance.now() / 1000,
+        playerId: data.destroyer.playerIndex,
+        position: { x: data.gridX, y: data.gridY },
+      });
+    }
+
     // Add debris particles
     const centerX = data.gridX * TILE_SIZE + TILE_SIZE / 2;
     const centerY = data.gridY * TILE_SIZE + TILE_SIZE / 2;
@@ -1536,6 +1612,18 @@ export class Game {
           SoundManager.play('powerUp');
         }
 
+        // Record power-up collection for telemetry
+        const telemetry = Telemetry.getInstance();
+        if (telemetry.isEnabled()) {
+          telemetry.recordEvent({
+            type: 'powerup_collected',
+            timestamp: performance.now() / 1000,
+            playerId: player.playerIndex,
+            position: { x: powerUp.position.gridX, y: powerUp.position.gridY },
+            data: { powerUpType: powerUp.type },
+          });
+        }
+
         this.applyPowerUp(player, powerUp);
 
         // Show floating text
@@ -1624,6 +1712,19 @@ export class Game {
 
   private onPlayerDied(data: { player: Player }): void {
     const player = data.player;
+
+    // Record player death for telemetry
+    const telemetry = Telemetry.getInstance();
+    if (telemetry.isEnabled()) {
+      telemetry.recordEvent({
+        type: 'player_death',
+        timestamp: performance.now() / 1000,
+        playerId: player.playerIndex,
+        position: { x: player.position.gridX, y: player.position.gridY },
+        data: { cause: 'explosion' },
+      });
+    }
+
     const particles = this.renderer.getParticleSystem();
     const camera = this.renderer.getCamera();
 
@@ -1711,5 +1812,11 @@ export class Game {
     this.phase = GamePhase.GAME_OVER;
     SoundManager.stopMusic();
     SoundManager.play('gameOver');
+
+    // Stop tracking and print AI analysis report
+    aiTracker.stop();
+    aiTracker.printReport();
+    haltDetector.stop();
+    haltDetector.printReport();
   }
 }
