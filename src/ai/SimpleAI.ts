@@ -241,6 +241,7 @@ export class SimpleAI {
 
       if (this.isValidCell(bx, by)) {
         this.grid[by][bx].hasBomb = true;
+        this.grid[by][bx].isWalkable = false;  // Bombs are physical obstacles
         this.grid[by][bx].isDangerous = true;
         // Track shortest danger time (multiple bombs may overlap)
         this.grid[by][bx].dangerTime = Math.min(this.grid[by][bx].dangerTime, bombTimer);
@@ -330,18 +331,40 @@ export class SimpleAI {
     // STRATEGY 1: If in danger, escape to closest safe tile
     if (this.grid[myY][myX].isDangerous) {
 
-      // If we have an active escape commitment, verify target is still safe
+      // If we have an active escape commitment, verify target and path are still safe
       if (this.escapeCommitment && !this.isStuck()) {
         const targetCell = this.grid[this.escapeCommitment.targetY]?.[this.escapeCommitment.targetX];
-        // If target is still safe, keep following commitment
-        if (targetCell && !targetCell.isDangerous && targetCell.isWalkable) {
+
+        // Check if the immediate next step is safe to traverse
+        const dx = this.escapeCommitment.direction === Direction.LEFT ? -1 :
+                   this.escapeCommitment.direction === Direction.RIGHT ? 1 : 0;
+        const dy = this.escapeCommitment.direction === Direction.UP ? -1 :
+                   this.escapeCommitment.direction === Direction.DOWN ? 1 : 0;
+        const nextX = myX + dx;
+        const nextY = myY + dy;
+        const nextCell = this.grid[nextY]?.[nextX];
+
+        // Calculate if we have enough time to cross the next tile safely
+        const timeToTraverse = this.getTimeToTraverseTiles(1);
+        // Safety buffer: accounts for not being at tile edge, grid position updating at midpoint, etc.
+        const dangerSafetyBuffer = timeToTraverse * 0.7 + 0.2;
+        const minTimeForDangerousTile = timeToTraverse + dangerSafetyBuffer;
+        const nextStepDangerTime = nextCell?.dangerTime ?? Infinity;
+        // Must also check walkability!
+        const nextStepIsSafe = nextCell && nextCell.isWalkable && (
+          nextStepDangerTime === Infinity ||  // Safe tile
+          nextStepDangerTime >= minTimeForDangerousTile  // Enough time to cross safely
+        );
+
+        // If target is still safe AND next step is safe to traverse, keep following commitment
+        if (targetCell && !targetCell.isDangerous && targetCell.isWalkable && nextStepIsSafe) {
           return {
             type: 'escape',
             targetX: this.escapeCommitment.targetX,
             targetY: this.escapeCommitment.targetY,
           };
         }
-        // Target is no longer safe, clear commitment and recalculate
+        // Target or path is no longer safe, clear commitment and recalculate
         this.escapeCommitment = null;
       }
 
@@ -359,6 +382,10 @@ export class SimpleAI {
             startPixelX: this.player.position.pixelX,
             startPixelY: this.player.position.pixelY,
           };
+        } else {
+          // DEBUG: findClosestSafeTile found a tile but getDirectionToward couldn't navigate to it
+          console.log(`[AI ${this.player.playerIndex}] ESCAPE MISMATCH: Found safe tile (${safeTile.x},${safeTile.y}) but getDirectionToward returned null`);
+          this.logGridAroundPlayer(myX, myY);
         }
 
         return {
@@ -377,6 +404,10 @@ export class SimpleAI {
             targetX: myX + dx,
             targetY: myY + dy,
           };
+        } else {
+          // DEBUG: Neither findClosestSafeTile nor emergency escape found anything
+          console.log(`[AI ${this.player.playerIndex}] NO ESCAPE FOUND at (${myX},${myY})`);
+          this.logGridAroundPlayer(myX, myY);
         }
       }
     }
@@ -434,9 +465,11 @@ export class SimpleAI {
     const visited = new Set<string>();
     visited.add(`${startX},${startY}`);
 
-    // Calculate minimum safe time - need enough time to cross tiles plus safety margin
+    // Calculate minimum safe time - need enough time to cross one tile plus safety buffer
     const timePerTile = this.getTimeToTraverseTiles(1);
-    const safetyMargin = 0.3; // Extra buffer for pixel misalignment
+    // Safety buffer: accounts for not being at tile edge, grid position updating at midpoint, etc.
+    const dangerSafetyBuffer = timePerTile * 0.7 + 0.2;
+    const minTimeForDangerousTile = timePerTile + dangerSafetyBuffer;
 
     // Initialize with immediate neighbors as first steps
     const directions = [[0, -1], [0, 1], [-1, 0], [1, 0]];
@@ -447,11 +480,29 @@ export class SimpleAI {
 
       if (this.isValidCell(nx, ny) && this.grid[ny][nx].isWalkable && !visited.has(key)) {
         const dangerTime = this.grid[ny][nx].dangerTime;
-        // Only walk through if we have enough time to cross (1 tile + safety margin)
-        const minTimeNeeded = timePerTile + safetyMargin;
-        if (!this.grid[ny][nx].isDangerous || dangerTime > minTimeNeeded) {
+        // Only enter dangerous tiles if we have enough time (with safety buffer)
+        if (!this.grid[ny][nx].isDangerous || (dangerTime > 0 && dangerTime >= minTimeForDangerousTile)) {
           visited.add(key);
           queue.push({x: nx, y: ny, dist: 1});
+        }
+      }
+    }
+
+    // If no neighbors were added (all blocked or too dangerous), try a more permissive search
+    // that accepts tiles with at least basic traverse time (risky but better than nothing)
+    if (queue.length === 0) {
+      for (const [dx, dy] of directions) {
+        const nx = startX + dx;
+        const ny = startY + dy;
+        const key = `${nx},${ny}`;
+
+        if (this.isValidCell(nx, ny) && this.grid[ny][nx].isWalkable && !visited.has(key)) {
+          const dangerTime = this.grid[ny][nx].dangerTime;
+          // Accept any tile with at least enough time to traverse (no safety buffer - emergency only)
+          if (dangerTime > 0 && dangerTime >= timePerTile) {
+            visited.add(key);
+            queue.push({x: nx, y: ny, dist: 1});
+          }
         }
       }
     }
@@ -486,7 +537,7 @@ export class SimpleAI {
       // If we've already found safe tiles and current dist is greater, stop
       if (dist > minAdjustedDist) continue;
 
-      // Explore neighbors - but avoid paths through active explosions
+      // Explore neighbors - use same safety buffer as getDirectionToward
       for (const [dx, dy] of directions) {
         const nx = x + dx;
         const ny = y + dy;
@@ -494,11 +545,9 @@ export class SimpleAI {
 
         if (this.isValidCell(nx, ny) && this.grid[ny][nx].isWalkable && !visited.has(key)) {
           const dangerTime = this.grid[ny][nx].dangerTime;
-          // Calculate time needed to reach this tile (dist+1 tiles from start)
-          const timeToReach = this.getTimeToTraverseTiles(dist + 1);
-          // Only allow if we have enough time to reach AND cross this tile
-          const minTimeNeeded = timeToReach + timePerTile + safetyMargin;
-          if (!this.grid[ny][nx].isDangerous || dangerTime > minTimeNeeded) {
+          // Only enter dangerous tiles if we have enough time (with safety buffer)
+          // This ensures paths found here can actually be navigated safely
+          if (!this.grid[ny][nx].isDangerous || (dangerTime > 0 && dangerTime >= minTimeForDangerousTile)) {
             visited.add(key);
             queue.push({x: nx, y: ny, dist: dist + 1});
           }
@@ -749,10 +798,32 @@ export class SimpleAI {
     // If no safe direction found and we're escaping, try ignoring danger as last resort
     if (direction === null && type === 'escape') {
       const urgentDirection = this.getDirectionToward(myX, myY, targetX, targetY, true);
-      return {direction: urgentDirection, placeBomb: false};
+      if (urgentDirection !== null) {
+        return {direction: urgentDirection, placeBomb: false};
+      }
+
+      // Last resort: use emergency escape direction (just pick best adjacent tile)
+      const emergencyDir = this.getEmergencyEscapeDirection(myX, myY);
+      if (emergencyDir !== null) {
+        console.log(`[AI ${this.player.playerIndex}] Using emergency escape direction: ${emergencyDir}`);
+        return {direction: emergencyDir, placeBomb: false};
+      }
+
+      // Truly stuck - log and return null
+      console.log(`[AI ${this.player.playerIndex}] COMPLETELY STUCK - no direction found`);
+      this.logGridAroundPlayer(myX, myY);
+      return {direction: null, placeBomb: false};
     }
 
-    return {direction, placeBomb: false};
+    // For escapes, skip alignment to move faster
+    if (type === 'escape') {
+      return {direction, placeBomb: false};
+    }
+
+    // For non-escape movement, align to tile center before changing direction
+    // This ensures the AI walks on tiles, not between them
+    const alignedDirection = this.getAlignedDirection(direction);
+    return {direction: alignedDirection, placeBomb: false};
   }
 
   private getDirectionTowardTileCenter(): Direction | null {
@@ -783,10 +854,73 @@ export class SimpleAI {
     return null;
   }
 
+  /**
+   * Check if we need to align to tile center before moving in a given direction.
+   * When moving horizontally (LEFT/RIGHT), we should be vertically centered.
+   * When moving vertically (UP/DOWN), we should be horizontally centered.
+   * Returns the alignment direction if needed, or null if already aligned.
+   */
+  private getAlignmentDirectionFor(intendedDirection: Direction): Direction | null {
+    const pixelX = this.player.position.pixelX;
+    const pixelY = this.player.position.pixelY;
+    const gridX = this.player.position.gridX;
+    const gridY = this.player.position.gridY;
+
+    // Calculate center of current grid cell
+    const centerX = gridX * TILE_SIZE;
+    const centerY = gridY * TILE_SIZE;
+
+    const offsetX = pixelX - centerX;
+    const offsetY = pixelY - centerY;
+
+    // Threshold for alignment (within 4 pixels)
+    const threshold = 4;
+
+    // For horizontal movement, need vertical alignment
+    if (intendedDirection === Direction.LEFT || intendedDirection === Direction.RIGHT) {
+      if (Math.abs(offsetY) > threshold) {
+        return offsetY > 0 ? Direction.UP : Direction.DOWN;
+      }
+    }
+
+    // For vertical movement, need horizontal alignment
+    if (intendedDirection === Direction.UP || intendedDirection === Direction.DOWN) {
+      if (Math.abs(offsetX) > threshold) {
+        return offsetX > 0 ? Direction.LEFT : Direction.RIGHT;
+      }
+    }
+
+    // Already aligned for this direction
+    return null;
+  }
+
+  /**
+   * Returns direction with alignment check - ensures AI walks on tile centers.
+   * If not aligned for the intended direction, returns alignment direction first.
+   */
+  private getAlignedDirection(intendedDirection: Direction | null): Direction | null {
+    if (intendedDirection === null) {
+      return null;
+    }
+
+    // Check if we need to align first
+    const alignmentDir = this.getAlignmentDirectionFor(intendedDirection);
+    if (alignmentDir !== null) {
+      return alignmentDir;
+    }
+
+    return intendedDirection;
+  }
+
   private findBFSEscapeAfterBomb(bombX: number, bombY: number): {x: number; y: number} | null {
     // Simulate bomb blast zone
     const bombRange = this.player.bombRange;
     const blastZone = new Set<string>();
+
+    // Calculate minimum safe time - need enough time to cross one tile plus safety buffer
+    const timePerTile = this.getTimeToTraverseTiles(1);
+    const dangerSafetyBuffer = timePerTile * 0.7 + 0.2;
+    const minTimeForDangerousTile = timePerTile + dangerSafetyBuffer;
 
     // Mark bomb position
     blastZone.add(`${bombX},${bombY}`);
@@ -854,7 +988,7 @@ export class SimpleAI {
       // Don't search too far
       if (dist >= 10) continue;
 
-      // Explore neighbors
+      // Explore neighbors - MUST check for existing danger from other bombs!
       const directions = [[0, -1], [0, 1], [-1, 0], [1, 0]];
       for (const [dx, dy] of directions) {
         const nx = x + dx;
@@ -862,8 +996,15 @@ export class SimpleAI {
         const nkey = `${nx},${ny}`;
 
         if (this.isValidCell(nx, ny) && this.grid[ny][nx].isWalkable && !visited.has(nkey)) {
-          visited.add(nkey);
-          queue.push({x: nx, y: ny, dist: dist + 1});
+          // Check if tile is safe to traverse (not in danger from OTHER bombs)
+          const dangerTime = this.grid[ny][nx].dangerTime;
+          const isSafeToTraverse = !this.grid[ny][nx].isDangerous ||
+            (dangerTime > 0 && dangerTime >= minTimeForDangerousTile);
+
+          if (isSafeToTraverse) {
+            visited.add(nkey);
+            queue.push({x: nx, y: ny, dist: dist + 1});
+          }
         }
       }
     }
@@ -913,9 +1054,33 @@ export class SimpleAI {
   }
 
   private getDirectionToward(fromX: number, fromY: number, toX: number, toY: number, ignoreDanger: boolean = false): Direction | null {
+    // Calculate time needed to traverse one tile
+    const timeToTraverseTile = this.getTimeToTraverseTiles(1);
+    // Safety buffer accounts for:
+    // - Player might not be at tile edge when starting (up to 0.5 tile worth of time)
+    // - Grid position updates at midpoint, not edge
+    // - Small reaction time buffer
+    const dangerSafetyBuffer = timeToTraverseTile * 0.7 + 0.2; // ~70% of tile time + 0.2s
+    const minTimeForDangerousTile = timeToTraverseTile + dangerSafetyBuffer;
+    const safetyMargin = ignoreDanger ? 0.2 : 0.4;
+    const minTimeRequired = timeToTraverseTile + safetyMargin;
+
     const canMove = (nx: number, ny: number) => {
       if (!this.isValidCell(nx, ny) || !this.grid[ny][nx].isWalkable) return false;
-      return ignoreDanger || !this.grid[ny][nx].isDangerous;
+      // NEVER walk into active explosions (dangerTime = 0), even when ignoring predicted danger
+      if (this.grid[ny][nx].dangerTime === 0) return false;
+
+      if (ignoreDanger) {
+        // When ignoring danger, still need enough time to cross safely
+        const dangerTime = this.grid[ny][nx].dangerTime;
+        // Need enough time to: enter tile + cross it + safety buffer
+        if (dangerTime !== Infinity && dangerTime < minTimeForDangerousTile) {
+          return false; // Not enough time to cross safely
+        }
+        return true;
+      }
+
+      return !this.grid[ny][nx].isDangerous;
     };
 
     // Already at target
@@ -933,9 +1098,14 @@ export class SimpleAI {
       const nextStep = this.cachedPath.path[0];
 
       // ALWAYS check for danger before using cached path!
-      // Only use cache if: walkable AND (ignoreDanger OR not dangerous)
+      // Never use cache if next step has active explosion (dangerTime = 0)
+      // When ignoreDanger, also check if there's enough time to cross safely
       const isWalkable = this.isValidCell(nextStep.x, nextStep.y) && this.grid[nextStep.y][nextStep.x].isWalkable;
-      const isSafe = ignoreDanger || !this.grid[nextStep.y][nextStep.x].isDangerous;
+      const dangerTime = this.grid[nextStep.y][nextStep.x].dangerTime;
+      const hasActiveExplosion = dangerTime === 0;
+      // When escaping (ignoreDanger), require time with safety buffer; otherwise require full margin
+      const hasEnoughTime = dangerTime === Infinity || dangerTime >= (ignoreDanger ? minTimeForDangerousTile : minTimeRequired);
+      const isSafe = !hasActiveExplosion && (ignoreDanger ? hasEnoughTime : !this.grid[nextStep.y][nextStep.x].isDangerous);
 
       if (isWalkable && isSafe) {
         // Check if next step is adjacent to current position
@@ -1072,5 +1242,27 @@ export class SimpleAI {
       }))),
       lastDecision: this.lastDecision
     };
+  }
+
+  private logGridAroundPlayer(px: number, py: number): void {
+    const timeToTraverse = this.getTimeToTraverseTiles(1);
+    console.log(`  Player at (${px},${py}), timeToTraverse=${timeToTraverse.toFixed(2)}s`);
+    console.log('  Adjacent tiles:');
+    const dirs = [
+      {name: 'UP', dx: 0, dy: -1},
+      {name: 'DOWN', dx: 0, dy: 1},
+      {name: 'LEFT', dx: -1, dy: 0},
+      {name: 'RIGHT', dx: 1, dy: 0},
+    ];
+    for (const {name, dx, dy} of dirs) {
+      const nx = px + dx;
+      const ny = py + dy;
+      if (this.isValidCell(nx, ny)) {
+        const cell = this.grid[ny][nx];
+        console.log(`    ${name} (${nx},${ny}): walkable=${cell.isWalkable}, dangerous=${cell.isDangerous}, dangerTime=${cell.dangerTime === Infinity ? 'Inf' : cell.dangerTime.toFixed(2)}, hasBomb=${cell.hasBomb}`);
+      } else {
+        console.log(`    ${name} (${nx},${ny}): OUT OF BOUNDS`);
+      }
+    }
   }
 }
